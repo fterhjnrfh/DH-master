@@ -1719,6 +1719,12 @@ public partial class MainWindowViewModel : ObservableObject
             FileVerifyResult = captureHealthy
                 ? "高速段采集已完成，可使用“验证”按钮检查文件。"
                 : StorageStatusMessage;
+            if (result?.Manifest is { } completedManifest)
+            {
+                var tdmsVerification = VerifyTdmsCaptureManifest(completedManifest);
+                FileVerifyPassed = tdmsVerification.passed;
+                FileVerifyResult = tdmsVerification.summary;
+            }
         }
         catch (Exception ex)
         {
@@ -1738,8 +1744,6 @@ public partial class MainWindowViewModel : ObservableObject
         RefreshRecentFiles();
         (StartStorageCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
         (StopStorageCommand as RelayCommand)?.NotifyCanExecuteChanged();
-
-        _ = AutoVerifyAfterStopAsync();
     }
 
     private void StopStorage()
@@ -2353,6 +2357,204 @@ public partial class MainWindowViewModel : ObservableObject
         return (passed, summary.ToString());
     }
 
+    private static (bool passed, string summary) VerifyTdmsCaptureManifest(SdkRawCaptureManifest manifest)
+    {
+        var summary = new StringBuilder();
+        summary.AppendLine($"TDMS source/segment 会话结构校验: {manifest.SessionName}");
+        summary.AppendLine($"采样率: {manifest.SampleRateHz:N0} Hz");
+        summary.AppendLine($"通道数: 期望 {manifest.ExpectedChannelCount:N0} / 实际 {manifest.ObservedChannelCount:N0}");
+        summary.AppendLine($"写入块: {manifest.WrittenBlockCount:N0}, 拒绝: {manifest.RejectedBlockCount:N0}, 故障: {manifest.WriteFaultCount:N0}");
+        summary.AppendLine($"保护触发: {(manifest.ProtectionTriggered ? "是" : "否")}");
+        summary.AppendLine($"TDMS 段数: {manifest.TdmsSegments.Count:N0}");
+        summary.AppendLine($"原始 payload: {FormatStorageSize(manifest.RawPayloadBytes)}");
+        summary.AppendLine($"文件总大小: {FormatStorageSize(manifest.CaptureFileBytes)}");
+
+        var segmentCheck = CheckTdmsSegments(manifest.TdmsSegments);
+        bool runtimeHealthy = !manifest.ProtectionTriggered
+            && manifest.RejectedBlockCount == 0
+            && manifest.WriteFaultCount == 0
+            && string.IsNullOrWhiteSpace(manifest.LastError);
+        bool passed = manifest.DataIntegrityPassed && runtimeHealthy && segmentCheck.Passed;
+
+        summary.AppendLine(runtimeHealthy
+            ? "运行期状态: 正常"
+            : $"运行期状态: 异常，原因={manifest.ProtectionReason}, 最后错误={manifest.LastError}");
+        summary.AppendLine(segmentCheck.Passed
+            ? $"段结构: 通过，已检查 {segmentCheck.CheckedCount:N0}/{segmentCheck.TotalCount:N0} 个 TDMS 段"
+            : $"段结构: 异常，已检查 {segmentCheck.CheckedCount:N0}/{segmentCheck.TotalCount:N0} 个 TDMS 段，问题 {segmentCheck.IssueCount:N0} 个");
+        summary.AppendLine($"TDMS payload 字节: {FormatStorageSize(segmentCheck.ExpectedPayloadBytes)}");
+        summary.AppendLine($"TDMS 文件字节: {FormatStorageSize(segmentCheck.FileBytes)}");
+        if (segmentCheck.CompressedSegmentCount > 0)
+        {
+            summary.AppendLine($"压缩段: {segmentCheck.CompressedSegmentCount:N0} 个");
+        }
+
+        foreach (string issue in segmentCheck.Issues.Take(8))
+        {
+            summary.AppendLine($"- {issue}");
+        }
+
+        if (segmentCheck.Issues.Count > 8)
+        {
+            summary.AppendLine($"... 其余 {segmentCheck.Issues.Count - 8:N0} 个问题已省略");
+        }
+
+        return (passed, summary.ToString());
+    }
+
+    private static TdmsSegmentCheckResult CheckTdmsSegments(IReadOnlyCollection<TdmsSegmentManifestEntry> segments)
+    {
+        var issues = new List<string>();
+        long expectedPayloadBytes = 0;
+        long fileBytes = 0;
+        int checkedCount = 0;
+        int compressedCount = 0;
+
+        foreach (var segment in segments)
+        {
+            if (string.IsNullOrWhiteSpace(segment.Path) || !File.Exists(segment.Path))
+            {
+                issues.Add($"缺少段文件: {segment.Path}");
+                continue;
+            }
+
+            checkedCount++;
+            var fileInfo = new FileInfo(segment.Path);
+            fileBytes += fileInfo.Length;
+
+            if (!TryReadTdmsLeadIn(segment.Path, out var leadIn, out string leadInError))
+            {
+                issues.Add($"{Path.GetFileName(segment.Path)} lead-in 异常: {leadInError}");
+                continue;
+            }
+
+            long expectedSegmentPayloadBytes;
+            if (segment.CompressionEnabled)
+            {
+                compressedCount++;
+                if (segment.ChannelPayloadBytes.Length != segment.ChannelIds.Length)
+                {
+                    issues.Add($"{Path.GetFileName(segment.Path)} 压缩通道 payload 数量与通道数不一致: {segment.ChannelPayloadBytes.Length}/{segment.ChannelIds.Length}");
+                    continue;
+                }
+
+                expectedSegmentPayloadBytes = segment.ChannelPayloadBytes.Sum(static value => (long)value);
+            }
+            else
+            {
+                expectedSegmentPayloadBytes = checked((long)segment.ChannelIds.Length * segment.SamplesPerChannel * sizeof(float));
+            }
+
+            expectedPayloadBytes += Math.Max(0, expectedSegmentPayloadBytes);
+
+            if (!leadIn.HeaderOk)
+            {
+                issues.Add($"{Path.GetFileName(segment.Path)} TDMS 标识异常");
+            }
+
+            if (leadIn.Version != 4713)
+            {
+                issues.Add($"{Path.GetFileName(segment.Path)} TDMS version 异常: {leadIn.Version}");
+            }
+
+            if (leadIn.DataBytes != expectedSegmentPayloadBytes)
+            {
+                issues.Add($"{Path.GetFileName(segment.Path)} payload 字节不一致: 当前 {FormatStorageSize(leadIn.DataBytes)} / manifest {FormatStorageSize(expectedSegmentPayloadBytes)}");
+            }
+
+            if (segment.SamplesPerChannel <= 0 || segment.ChannelIds.Length == 0 || segment.SampleRateHz <= 0)
+            {
+                issues.Add($"{Path.GetFileName(segment.Path)} manifest 时间线字段无效");
+            }
+        }
+
+        bool passed = segments.Count > 0 && checkedCount == segments.Count && issues.Count == 0;
+        return new TdmsSegmentCheckResult(
+            passed,
+            segments.Count,
+            checkedCount,
+            issues.Count,
+            expectedPayloadBytes,
+            fileBytes,
+            compressedCount,
+            issues);
+    }
+
+    private static bool TryReadTdmsLeadIn(string filePath, out TdmsLeadInInfo info, out string error)
+    {
+        info = new TdmsLeadInInfo(false, 0, 0, 0, 0, 0, 0, 0);
+        error = string.Empty;
+        Span<byte> header = stackalloc byte[28];
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length < header.Length)
+            {
+                error = $"文件过小: {FormatStorageSize(fileInfo.Length)}";
+                return false;
+            }
+
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.RandomAccess);
+            int read = stream.Read(header);
+            if (read < header.Length)
+            {
+                error = $"lead-in 读取不足: {read}/{header.Length}";
+                return false;
+            }
+
+            bool headerOk = header[0] == (byte)'T'
+                && header[1] == (byte)'D'
+                && header[2] == (byte)'S'
+                && header[3] == (byte)'m';
+            uint toc = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(4, 4));
+            uint version = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(8, 4));
+            ulong nextSegmentOffset = BinaryPrimitives.ReadUInt64LittleEndian(header.Slice(12, 8));
+            ulong rawDataOffset = BinaryPrimitives.ReadUInt64LittleEndian(header.Slice(20, 8));
+            long rawDataStart = checked(28L + (long)rawDataOffset);
+            long dataBytes = fileInfo.Length - rawDataStart;
+
+            info = new TdmsLeadInInfo(headerOk, toc, version, nextSegmentOffset, rawDataOffset, rawDataStart, dataBytes, fileInfo.Length);
+            if (rawDataStart < header.Length || rawDataStart > fileInfo.Length)
+            {
+                error = $"raw data offset 越界: {rawDataStart:N0}/{fileInfo.Length:N0}";
+                return false;
+            }
+
+            if (nextSegmentOffset != (ulong)(fileInfo.Length - 28L))
+            {
+                error = $"next segment offset 与文件大小不一致: {nextSegmentOffset:N0}/{fileInfo.Length - 28L:N0}";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private sealed record TdmsLeadInInfo(
+        bool HeaderOk,
+        uint Toc,
+        uint Version,
+        ulong NextSegmentOffset,
+        ulong RawDataOffset,
+        long RawDataStart,
+        long DataBytes,
+        long FileBytes);
+
+    private sealed record TdmsSegmentCheckResult(
+        bool Passed,
+        int TotalCount,
+        int CheckedCount,
+        int IssueCount,
+        long ExpectedPayloadBytes,
+        long FileBytes,
+        int CompressedSegmentCount,
+        List<string> Issues);
+
     private static (bool passed, string summary) VerifyFastSegmentFile(string filePath)
     {
         if (!File.Exists(filePath))
@@ -2428,8 +2630,35 @@ public partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    private static (bool passed, string summary) VerifyManualTdmsSourceSegmentFile(string filePath)
+    {
+        var summary = new StringBuilder();
+        summary.AppendLine($"TDMS source/segment 单文件结构校验: {Path.GetFileName(filePath)}");
+
+        if (!TryReadTdmsLeadIn(filePath, out var leadIn, out string error))
+        {
+            summary.AppendLine($"lead-in 校验失败: {error}");
+            return (false, summary.ToString());
+        }
+
+        bool passed = leadIn.HeaderOk && leadIn.Version == 4713 && leadIn.DataBytes > 0;
+        summary.AppendLine(leadIn.HeaderOk ? "TDMS 标识: TDSm" : "TDMS 标识异常");
+        summary.AppendLine($"TDMS version: {leadIn.Version}");
+        summary.AppendLine($"raw data offset: {leadIn.RawDataStart:N0} bytes");
+        summary.AppendLine($"payload bytes: {FormatStorageSize(leadIn.DataBytes)}");
+        summary.AppendLine($"file bytes: {FormatStorageSize(leadIn.FileBytes)}");
+        summary.AppendLine("说明: 当前主线是多个 raw/source_*.tdms + session.manifest.json 组成一个逻辑会话；单文件只做结构校验，不再执行旧的全通道 DDC 回读无损验证。");
+        summary.AppendLine(passed ? "结构校验通过" : "结构校验失败");
+        return (passed, summary.ToString());
+    }
+
     private static (bool passed, string summary) VerifyTdmsSourceSegmentFile(string filePath)
     {
+        if (File.Exists(filePath))
+        {
+            return VerifyManualTdmsSourceSegmentFile(filePath);
+        }
+
         if (!File.Exists(filePath))
         {
             return (false, $"TDMS 源段文件不存在: {filePath}");
@@ -2548,6 +2777,14 @@ public partial class MainWindowViewModel : ObservableObject
             if (IsFastSegmentFile(filePath))
             {
                 var (passed, summary) = VerifyFastSegmentFile(filePath);
+                FileVerifyPassed = passed;
+                FileVerifyResult = summary;
+                return;
+            }
+
+            if (IsTdmsSourceSegmentFile(filePath))
+            {
+                var (passed, summary) = VerifyTdmsSourceSegmentFile(filePath);
                 FileVerifyPassed = passed;
                 FileVerifyResult = summary;
                 return;
