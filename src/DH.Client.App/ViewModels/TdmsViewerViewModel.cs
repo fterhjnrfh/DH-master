@@ -265,6 +265,8 @@ public class TdmsViewerViewModel : ObservableObject
 
     private void OnSelectedFileChanged()
     {
+        try
+        {
         // 清空所有状态
         Devices.Clear();
         DeviceSelectionItems.Clear();
@@ -293,9 +295,23 @@ public class TdmsViewerViewModel : ObservableObject
         
         // 读取组和通道。直存会话优先从 session.manifest.json 组装完整通道表，
         // 避免选中 raw/source_*.tdms 时只看到单个 source 文件。
-        var dict = TryLoadPersistedSessionChannels(_selectedFile, out var persistedChannels)
-            ? persistedChannels
-            : TdmsReaderUtil.ListGroupsAndChannels(_selectedFile);
+        Dictionary<string, string[]> dict;
+        if (TryLoadPersistedSessionChannels(_selectedFile, out var persistedChannels))
+        {
+            dict = persistedChannels;
+        }
+        else
+        {
+            string? tdmsProbePath = ResolveTdmsStructureProbePath(_selectedFile);
+            if (string.IsNullOrWhiteSpace(tdmsProbePath))
+            {
+                StatusMessage = "会话目录中没有找到可读取的 TDMS 文件";
+                return;
+            }
+
+            dict = TdmsReaderUtil.ListGroupsAndChannels(tdmsProbePath)
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+        }
         if (dict.Count == 0)
         {
             StatusMessage = "会话或文件中没有找到数据通道";
@@ -368,12 +384,19 @@ public class TdmsViewerViewModel : ObservableObject
             DeviceSelectionItems[0].IsSelected = true;
         }
         
-        StatusMessage = $"已加载 {dict.Values.Sum(v => v.Length)} 个通道，请选择设备和通道";
-        (PlotSelectedChannelsCommand as RelayCommand)?.NotifyCanExecuteChanged();
-        (SelectAllDevicesCommand as RelayCommand)?.NotifyCanExecuteChanged();
-        (DeselectAllDevicesCommand as RelayCommand)?.NotifyCanExecuteChanged();
-        (SelectAllChannelsCommand as RelayCommand)?.NotifyCanExecuteChanged();
-        (DeselectAllChannelsCommand as RelayCommand)?.NotifyCanExecuteChanged();
+            StatusMessage = $"已加载 {dict.Values.Sum(v => v.Length)} 个通道，请选择设备和通道";
+            (PlotSelectedChannelsCommand as RelayCommand)?.NotifyCanExecuteChanged();
+            (SelectAllDevicesCommand as RelayCommand)?.NotifyCanExecuteChanged();
+            (DeselectAllDevicesCommand as RelayCommand)?.NotifyCanExecuteChanged();
+            (SelectAllChannelsCommand as RelayCommand)?.NotifyCanExecuteChanged();
+            (DeselectAllChannelsCommand as RelayCommand)?.NotifyCanExecuteChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TDMS] failed to open selected path {_selectedFile}: {ex}");
+            StatusMessage = $"读取会话失败: {ex.Message}";
+            (PlotSelectedChannelsCommand as RelayCommand)?.NotifyCanExecuteChanged();
+        }
     }
     
     private void OnSelectedDeviceChanged()
@@ -1077,14 +1100,7 @@ public class TdmsViewerViewModel : ObservableObject
     {
         if (Directory.Exists(inputPath))
         {
-            string fullPath = Path.GetFullPath(inputPath);
-            if (IsSessionArtifactRoot(fullPath))
-            {
-                return fullPath;
-            }
-
-            string childArtifacts = Path.Combine(fullPath, "session.artifacts");
-            return IsSessionArtifactRoot(childArtifacts) ? childArtifacts : null;
+            return FindArtifactRootInDirectory(Path.GetFullPath(inputPath));
         }
 
         if (!File.Exists(inputPath))
@@ -1097,16 +1113,17 @@ public class TdmsViewerViewModel : ObservableObject
 
         if (fileName.EndsWith(".tdms", StringComparison.OrdinalIgnoreCase))
         {
-            string sessionArtifacts = Path.Combine(directory, "session.artifacts");
-            if (IsSessionArtifactRoot(sessionArtifacts))
+            string? siblingArtifactRoot = FindArtifactRootInDirectory(directory);
+            if (!string.IsNullOrWhiteSpace(siblingArtifactRoot))
             {
-                return sessionArtifacts;
+                return siblingArtifactRoot;
             }
 
-            string parentSessionArtifacts = Path.Combine(Directory.GetParent(directory)?.FullName ?? directory, "session.artifacts");
-            if (IsSessionArtifactRoot(parentSessionArtifacts))
+            string? parentArtifactRoot = FindArtifactRootInDirectory(
+                Directory.GetParent(directory)?.FullName ?? directory);
+            if (!string.IsNullOrWhiteSpace(parentArtifactRoot))
             {
-                return parentSessionArtifacts;
+                return parentArtifactRoot;
             }
 
             string artifacts = Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(fileName)}.artifacts");
@@ -1124,6 +1141,61 @@ public class TdmsViewerViewModel : ObservableObject
         }
 
         return null;
+    }
+
+    private static string? FindArtifactRootInDirectory(string directoryPath)
+    {
+        if (!Directory.Exists(directoryPath))
+        {
+            return null;
+        }
+
+        if (IsSessionArtifactRoot(directoryPath))
+        {
+            return directoryPath;
+        }
+
+        return Directory
+            .EnumerateDirectories(directoryPath, "*.artifacts", SearchOption.TopDirectoryOnly)
+            .Where(IsSessionArtifactRoot)
+            .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+    }
+
+    private static string? ResolveTdmsStructureProbePath(string inputPath)
+    {
+        if (File.Exists(inputPath))
+        {
+            return inputPath;
+        }
+
+        if (!Directory.Exists(inputPath))
+        {
+            return null;
+        }
+
+        string fullPath = Path.GetFullPath(inputPath);
+        string rawPath = Path.Combine(fullPath, "raw");
+        IEnumerable<string> roots = Directory.Exists(rawPath)
+            ? new[] { rawPath, fullPath }
+            : new[] { fullPath };
+
+        foreach (string root in roots)
+        {
+            string? tdmsFile = Directory
+                .EnumerateFiles(root, "*.tdms", SearchOption.TopDirectoryOnly)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(tdmsFile))
+            {
+                return tdmsFile;
+            }
+        }
+
+        return Directory
+            .EnumerateFiles(fullPath, "*.tdms", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
     private static bool TryLoadPersistedSessionChannels(
