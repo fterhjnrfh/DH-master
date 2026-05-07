@@ -434,8 +434,7 @@ internal sealed class SdkRawCaptureWriter : IDisposable
 
         ResetState();
 
-        string safeName = SanitizeName(sessionName);
-        string sessionFolder = Path.Combine(basePath, $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss_fff}");
+        string sessionFolder = StorageSessionNaming.CreateUniqueSessionFolder(basePath, sessionName, out string safeName);
         Directory.CreateDirectory(sessionFolder);
 
         _sessionName = safeName;
@@ -1302,21 +1301,4 @@ internal sealed class SdkRawCaptureWriter : IDisposable
         while (Interlocked.CompareExchange(ref target, candidate, current) != current);
     }
 
-    private static string SanitizeName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return "session";
-        }
-
-        var invalid = Path.GetInvalidFileNameChars();
-        var sb = new StringBuilder(name.Length);
-        foreach (char ch in name)
-        {
-            sb.Append(Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
-        }
-
-        string safe = sb.ToString().Trim();
-        return string.IsNullOrWhiteSpace(safe) ? "session" : safe;
-    }
 }

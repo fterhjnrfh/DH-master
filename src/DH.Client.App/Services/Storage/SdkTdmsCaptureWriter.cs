@@ -101,12 +101,12 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
         ResetState();
 
-        _sessionName = SanitizeName(sessionName);
         _sampleRateHz = sampleRateHz;
         _compressionSettings = compressionSettings?.Clone() ?? new StorageCompressionSettings();
         _compressionSettings.Normalize();
         _startedAtUtc = DateTime.UtcNow;
-        _sessionFolder = Path.Combine(basePath, $"{_sessionName}_{DateTime.Now:yyyyMMdd_HHmmss_fff}");
+        _sessionFolder = StorageSessionNaming.CreateUniqueSessionFolder(basePath, sessionName, out string safeSessionName);
+        _sessionName = safeSessionName;
         _rawFolder = Path.Combine(_sessionFolder, "raw");
         _artifactRootPath = Path.Combine(_sessionFolder, $"{_sessionName}.artifacts");
         Directory.CreateDirectory(_rawFolder);
@@ -1018,21 +1018,6 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         catch
         {
         }
-    }
-
-    private static string SanitizeName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return "session";
-        }
-
-        var invalid = Path.GetInvalidFileNameChars();
-        var chars = name
-            .Select(ch => Array.IndexOf(invalid, ch) >= 0 ? '_' : ch)
-            .ToArray();
-        string safe = new string(chars).Trim();
-        return string.IsNullOrWhiteSpace(safe) ? "session" : safe;
     }
 
     private sealed class SourceTdmsWriter : IDisposable

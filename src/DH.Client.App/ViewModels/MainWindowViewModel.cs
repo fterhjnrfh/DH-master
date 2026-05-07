@@ -11,6 +11,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -65,6 +66,10 @@ public partial class MainWindowViewModel : ObservableObject
 {
     private static readonly string DefaultStoragePath = AppDataPaths.DataRoot;
     private static readonly string DefaultSdkConfigPath = SdkPathDefaults.ResolveDefaultConfigPath();
+    private static readonly string StorageUiPreferencePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DH.Client.App",
+        "storage-ui.json");
 
     public ObservableCollection<ChannelInfo> Channels { get; } = new();
     public ObservableCollection<DeviceInfo> Devices { get; } = new();
@@ -79,6 +84,7 @@ public partial class MainWindowViewModel : ObservableObject
     private enum StorageRuntimeKind { Tdms, SdkRawCapture, SdkTdmsCapture }
     [ObservableProperty] private bool _storageEnabled;
     [ObservableProperty] private string _storageSessionName = "session";
+    [ObservableProperty] private int _storageSessionNamingModeIndex = 1;
     [ObservableProperty] private int _storageCompressionAlgorithmIndex;
     [ObservableProperty] private int _storageCompressionPreprocessIndex;
     [ObservableProperty] private int _storageCompressionZstdLevel = 3;
@@ -105,6 +111,13 @@ public partial class MainWindowViewModel : ObservableObject
         "Diff 2",
         "LPC"
     };
+    public ObservableCollection<string> StorageSessionNamingOptions { get; } = new()
+    {
+        "自定义名称",
+        "按存储时间"
+    };
+    public bool IsCustomSessionNamingSelected => StorageSessionNamingModeIndex == 0;
+    public bool IsTimeSessionNamingSelected => StorageSessionNamingModeIndex == 1;
     public bool IsZstdCompressionSelected => GetSelectedCompressionType() == CompressionType.Zstd;
     public bool IsLz4CompressionSelected => GetSelectedCompressionType() == CompressionType.LZ4;
     public bool IsLz4HcCompressionSelected => GetSelectedCompressionType() == CompressionType.LZ4_HC;
@@ -130,6 +143,7 @@ public partial class MainWindowViewModel : ObservableObject
     // 命令：存储控制
     public IRelayCommand StartStorageCommand { get; }
     public IRelayCommand StopStorageCommand { get; }
+    public IRelayCommand BrowseStoragePathCommand { get; }
     // 新增：最近文件与读取相关命令
     public IRelayCommand RefreshRecentFilesCommand { get; }
     public IRelayCommand OpenOutputFolderCommand { get; }
@@ -393,11 +407,13 @@ public partial class MainWindowViewModel : ObservableObject
         // 存储命令初始化
         StartStorageCommand = new AsyncRelayCommand(StartStorageAsync, () => !StorageEnabled && !_sdkTdmsCaptureStopInProgress);
         StopStorageCommand = new RelayCommand(StopStorage, () => StorageEnabled && !_sdkTdmsCaptureStopInProgress);
+        BrowseStoragePathCommand = new AsyncRelayCommand(BrowseStoragePathAsync);
         // 新增命令初始化
         RefreshRecentFilesCommand = new RelayCommand(RefreshRecentFiles);
         OpenOutputFolderCommand = new RelayCommand(OpenOutputFolder);
         TestReadSelectedFileCommand = new RelayCommand(TestReadSelectedFile, () => !string.IsNullOrEmpty(SelectedTdmsFile?.FullPath));
         VerifyStoredFileCommand = new AsyncRelayCommand(VerifyStoredFileAsync, () => !string.IsNullOrEmpty(SelectedTdmsFile?.FullPath));
+        LoadStorageUiPreferences();
 
         // 运行时诊断：输出 TDMS 原生库可用性
         try
@@ -1251,6 +1267,118 @@ public partial class MainWindowViewModel : ObservableObject
         return AppDataPaths.ResolveStoragePath(path);
     }
 
+    private void LoadStorageUiPreferences()
+    {
+        try
+        {
+            if (!File.Exists(StorageUiPreferencePath))
+            {
+                return;
+            }
+
+            string json = File.ReadAllText(StorageUiPreferencePath);
+            var prefs = JsonSerializer.Deserialize<StorageUiPreferences>(json);
+            if (prefs == null)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(prefs.StoragePath))
+            {
+                StoragePath = prefs.StoragePath;
+            }
+
+            if (!string.IsNullOrWhiteSpace(prefs.SessionName))
+            {
+                StorageSessionName = prefs.SessionName;
+            }
+
+            StorageSessionNamingModeIndex = Math.Clamp(prefs.SessionNamingModeIndex, 0, StorageSessionNamingOptions.Count - 1);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Storage] Load UI preferences failed: {ex.Message}");
+        }
+    }
+
+    private void SaveStorageUiPreferences()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(StorageUiPreferencePath) ?? ".");
+            var prefs = new StorageUiPreferences
+            {
+                StoragePath = StoragePath,
+                SessionName = StorageSessionName,
+                SessionNamingModeIndex = StorageSessionNamingModeIndex
+            };
+            File.WriteAllText(
+                StorageUiPreferencePath,
+                JsonSerializer.Serialize(prefs, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Storage] Save UI preferences failed: {ex.Message}");
+        }
+    }
+
+    partial void OnStoragePathChanged(string value) => SaveStorageUiPreferences();
+
+    partial void OnStorageSessionNameChanged(string value) => SaveStorageUiPreferences();
+
+    partial void OnStorageSessionNamingModeIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(IsCustomSessionNamingSelected));
+        OnPropertyChanged(nameof(IsTimeSessionNamingSelected));
+        SaveStorageUiPreferences();
+    }
+
+    private string ResolveStorageSessionName()
+        => StorageSessionNamingModeIndex == 1
+            ? $"session_{DateTime.Now:yyyyMMdd_HHmmss_fff}"
+            : StorageSessionName;
+
+    private async Task BrowseStoragePathAsync()
+    {
+        try
+        {
+            var topLevel = Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+                ? desktop.MainWindow
+                : null;
+
+            if (topLevel == null)
+            {
+                return;
+            }
+
+            var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(new Avalonia.Platform.Storage.FolderPickerOpenOptions
+            {
+                Title = "选择存储输出目录",
+                AllowMultiple = false
+            });
+
+            if (folders.Count > 0)
+            {
+                StoragePath = folders[0].Path.LocalPath;
+                SaveStorageUiPreferences();
+                RefreshRecentFiles();
+            }
+        }
+        catch (Exception ex)
+        {
+            StorageStatusMessage = $"选择输出目录失败: {ex.Message}";
+        }
+    }
+
+    private sealed class StorageUiPreferences
+    {
+        public string StoragePath { get; set; } = DefaultStoragePath;
+
+        public string SessionName { get; set; } = "session";
+
+        public int SessionNamingModeIndex { get; set; } = 1;
+    }
+
     private StorageCompressionSettings BuildStorageCompressionSettings(string basePath)
     {
         if (StorageCompressionSettings.TryLoad(basePath, out var settings, out string configPath, out string error))
@@ -1333,13 +1461,15 @@ public partial class MainWindowViewModel : ObservableObject
         var basePath = ResolveStoragePath(StoragePath);
         Directory.CreateDirectory(basePath);
         var channelIds = ResolveStorageChannelIds();
+        var sessionName = ResolveStorageSessionName();
         var compressionSettings = BuildStorageCompressionSettings(basePath);
+        SaveStorageUiPreferences();
 
         await Task.Run(() =>
         {
             try
             {
-                StartSdkTdmsCaptureSession(basePath, channelIds, compressionSettings);
+                StartSdkTdmsCaptureSession(basePath, sessionName, channelIds, compressionSettings);
 
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
@@ -1507,7 +1637,7 @@ public partial class MainWindowViewModel : ObservableObject
         });
     }
 
-    private void StartSdkRawCaptureSession(string basePath, IReadOnlyCollection<int> channelIds)
+    private void StartSdkRawCaptureSession(string basePath, string sessionName, IReadOnlyCollection<int> channelIds)
     {
         if (_sdkDriverManager == null)
         {
@@ -1517,7 +1647,7 @@ public partial class MainWindowViewModel : ObservableObject
         CleanupSdkRawCaptureSubscription();
         _sdkRawCaptureWriter?.Dispose();
         _sdkRawCaptureWriter = new SdkRawCaptureWriter();
-        _sdkRawCaptureWriter.Start(basePath, StorageSessionName, SampleRate, channelIds);
+        _sdkRawCaptureWriter.Start(basePath, sessionName, SampleRate, channelIds);
         _sdkRawCaptureProtectionStopPending = false;
         SetSdkRealtimePublishEnabled(true);
 
@@ -1546,6 +1676,7 @@ public partial class MainWindowViewModel : ObservableObject
 
     private void StartSdkTdmsCaptureSession(
         string basePath,
+        string sessionName,
         IReadOnlyCollection<int> channelIds,
         StorageCompressionSettings compressionSettings)
     {
@@ -1559,7 +1690,7 @@ public partial class MainWindowViewModel : ObservableObject
         _sdkTdmsCaptureWriter = new SdkTdmsCaptureWriter();
         _sdkTdmsCaptureWriter.Start(
             basePath,
-            StorageSessionName,
+            sessionName,
             SampleRate,
             channelIds,
             compressionSettings);

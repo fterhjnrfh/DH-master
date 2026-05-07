@@ -164,15 +164,18 @@
 						<TextBlock Text="⚙️ 写入配置" FontWeight="Bold" FontSize="14" Foreground="#333333"/>
 						
 						<!-- 路径设置 -->
-						<Grid ColumnDefinitions="Auto, *" VerticalAlignment="Center">
+						<Grid ColumnDefinitions="Auto,8,*,8,Auto" VerticalAlignment="Center">
 							<TextBlock Text="输出目录" VerticalAlignment="Center" Width="70" Foreground="#444444"/>
-							<TextBox Grid.Column="1" Watermark="默认使用当前工程的 data 目录，可用 DH_DATA_ROOT 覆盖" Text="{Binding StoragePath}"/>
+							<TextBox Grid.Column="2" Watermark="默认使用当前工程的 data 目录，可用 DH_DATA_ROOT 覆盖" Text="{Binding StoragePath, Mode=TwoWay}"/>
+							<Button Grid.Column="4" Content="浏览..." Command="{Binding BrowseStoragePathCommand}" MinWidth="72"/>
 						</Grid>
 
                         <!-- 会话名称 -->
-                        <Grid ColumnDefinitions="Auto, *" VerticalAlignment="Center">
+                        <Grid ColumnDefinitions="Auto,8,170,8,*" VerticalAlignment="Center">
                             <TextBlock Text="会话名称" Grid.Column="0" VerticalAlignment="Center" Width="70" Foreground="#444444"/>
-                            <TextBox Grid.Column="1" Text="{Binding StorageSessionName}"/>
+                            <ComboBox Grid.Column="2" ItemsSource="{Binding StorageSessionNamingOptions}" SelectedIndex="{Binding StorageSessionNamingModeIndex, Mode=TwoWay}" MinWidth="160"/>
+                            <TextBox Grid.Column="4" Text="{Binding StorageSessionName, Mode=TwoWay}" IsVisible="{Binding IsCustomSessionNamingSelected}"/>
+                            <TextBlock Grid.Column="4" Text="session_yyyyMMdd_HHmmss_fff" Foreground="#666666" VerticalAlignment="Center" IsVisible="{Binding IsTimeSessionNamingSelected}"/>
                         </Grid>
 
                         <Border Background="#ffffff" BorderBrush="#d9d9d9" BorderThickness="1" CornerRadius="4" Padding="12">
