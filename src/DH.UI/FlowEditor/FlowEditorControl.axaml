@@ -1,0 +1,76 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="NewAvalonia.FlowEditor.FlowEditorControl">
+  <Grid RowDefinitions="*,Auto" ColumnDefinitions="240,*,260" Background="#1B1B1F">
+    <!-- 左侧工具栏（与设计器一致的深色悬浮风格） -->
+    <Border Grid.Row="0" Grid.Column="0" Background="#2D2D30" BorderBrush="#444" BorderThickness="1" Padding="12">
+      <ScrollViewer>
+        <StackPanel Spacing="10">
+          <TextBlock Text="节点库" FontWeight="Bold" Foreground="#F2F2F2" Margin="0,0,0,6"/>
+          
+          <!-- 开始节点 -->
+          <Border Name="StartNodeTemplate" Background="#2F4F2F" BorderBrush="#5FAF5F" BorderThickness="1.2"
+                  CornerRadius="6" Padding="10" Margin="0,5" Cursor="Hand">
+            <TextBlock Text="开始" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White"/>
+          </Border>
+          
+          <!-- 高斯滤波节点 -->
+          <Border Name="GaussianNodeTemplate" Background="#2D3A52" BorderBrush="#6BA8FF" BorderThickness="1.2"
+                  CornerRadius="6" Padding="10" Margin="0,5" Cursor="Hand">
+            <TextBlock Text="高斯滤波" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#E6F0FF"/>
+          </Border>
+          
+          <!-- 中值滤波节点 -->
+          <Border Name="MedianNodeTemplate" Background="#2D3A52" BorderBrush="#6BA8FF" BorderThickness="1.2"
+                  CornerRadius="6" Padding="10" Margin="0,5" Cursor="Hand">
+            <TextBlock Text="中值滤波" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#E6F0FF"/>
+          </Border>
+          
+          <!-- 移动平均滤波节点 -->
+          <Border Name="MovingAverageNodeTemplate" Background="#2D3A52" BorderBrush="#6BA8FF" BorderThickness="1.2"
+                  CornerRadius="6" Padding="10" Margin="0,5" Cursor="Hand">
+            <TextBlock Text="移动平均滤波" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#E6F0FF"/>
+          </Border>
+          
+          <!-- 信号平滑节点 -->
+          <Border Name="SignalSmoothNodeTemplate" Background="#2D3A52" BorderBrush="#6BA8FF" BorderThickness="1.2"
+                  CornerRadius="6" Padding="10" Margin="0,5" Cursor="Hand">
+            <TextBlock Text="信号平滑" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#E6F0FF"/>
+          </Border>
+          
+          <!-- 结束节点 -->
+          <Border Name="EndNodeTemplate" Background="#4B2B2B" BorderBrush="#F28B82" BorderThickness="1.2"
+                  CornerRadius="6" Padding="10" Margin="0,5" Cursor="Hand">
+            <TextBlock Text="结束" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White"/>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <!-- 中央画布（与设计器统一的明亮画布） -->
+    <Border Grid.Row="0" Grid.Column="1" Background="#121212" Name="CanvasBorder" 
+            BorderBrush="#555" BorderThickness="1">
+      <Canvas Name="FlowCanvas" Background="White"/>
+    </Border>
+
+    <!-- 右侧属性面板（深色风格，与设计器属性面板匹配） -->
+    <Border Grid.Row="0" Grid.Column="2" Background="#2D2D30" BorderBrush="#444" BorderThickness="1" Padding="12">
+      <ScrollViewer>
+        <StackPanel Spacing="10">
+          <TextBlock Text="节点属性" FontWeight="Bold" Foreground="#F2F2F2" Margin="0,0,0,6"/>
+          <StackPanel Name="PropertyPanel" Spacing="6"/>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <!-- 底部控制栏 -->
+    <Border Grid.Row="1" Grid.ColumnSpan="3" Background="#2D2D30" BorderBrush="#444" BorderThickness="1,1,1,0" Padding="10">
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+        <Button Name="ExportButton" Content="导出为DLL/SO" MinWidth="120"
+                Background="#3C3C3C" Foreground="White" BorderBrush="#555"/>
+        <Button Name="ClearButton" Content="清空画布" MinWidth="100"
+                Background="#3C3C3C" Foreground="White" BorderBrush="#555"/>
+      </StackPanel>
+    </Border>
+  </Grid>
+</UserControl>

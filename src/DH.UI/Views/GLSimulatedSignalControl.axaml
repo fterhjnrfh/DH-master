@@ -1,0 +1,117 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:NewAvalonia.Views"
+             xmlns:vm="using:NewAvalonia.ViewModels"
+             x:Class="NewAvalonia.Views.GLSimulatedSignalControl"
+             x:DataType="vm:GLSimulatedSignalViewModel"
+             Height="480" MinHeight="400" MinWidth="880">
+
+  <Design.DataContext>
+    <vm:GLSimulatedSignalViewModel/>
+  </Design.DataContext>
+
+  <Border Background="#2D2D30" CornerRadius="8" Padding="15">
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="3*" MinWidth="660"/>
+        <ColumnDefinition Width="1*" MinWidth="220"/>
+      </Grid.ColumnDefinitions>
+      
+      <!-- 波形显示区域（左） -->
+      <Border Grid.Column="0" Background="Black" CornerRadius="5" Padding="5" Margin="0,0,15,0">
+        <local:GLSimulatedSignalCanvas Name="SignalGLCanvas"/>
+      </Border>
+      
+      <!-- 控制面板（右） -->
+      <Border Grid.Column="1" Background="#3C3C3C" CornerRadius="5" Padding="10">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Orientation="Vertical" Spacing="12">
+
+            <!-- 波形调整（默认折叠） -->
+            <Expander Header="波形调整" IsExpanded="False">
+              <StackPanel Orientation="Vertical" Spacing="8" Margin="0,6,0,0">
+                <!-- 峰值位置 -->
+                <TextBlock Text="峰值位置:" Foreground="White" FontSize="12" Margin="0,2,0,2"/>
+                <Slider Minimum="0" Maximum="200" Value="{Binding PeakPosition}"/>
+                <!-- 峰值高度 -->
+                <TextBlock Text="峰值高度:" Foreground="White" FontSize="12" Margin="0,8,0,2"/>
+                <Slider Minimum="0" Maximum="5" Value="{Binding PeakHeight}" SmallChange="0.1" LargeChange="1"/>
+                <!-- 峰值宽度 -->
+                <TextBlock Text="峰值宽度:" Foreground="White" FontSize="12" Margin="0,8,0,2"/>
+                <Slider Minimum="1" Maximum="50" Value="{Binding PeakWidth}"/>
+                <!-- 噪声水平 -->
+                <TextBlock Text="噪声水平:" Foreground="White" FontSize="12" Margin="0,8,0,2"/>
+                <Slider Minimum="0" Maximum="1" Value="{Binding NoiseLevel}" SmallChange="0.05" LargeChange="0.2"/>
+                <!-- 基线漂移 -->
+                <TextBlock Text="基线漂移:" Foreground="White" FontSize="12" Margin="0,8,0,2"/>
+                <Slider Minimum="0" Maximum="2" Value="{Binding BaselineDrift}" SmallChange="0.1" LargeChange="0.5"/>
+              </StackPanel>
+            </Expander>
+
+            <!-- 分隔线 -->
+            <Border Height="1" Background="#555555" Margin="0,5"/>
+
+            <!-- 信号处理 -->
+            <StackPanel Orientation="Vertical" Spacing="8">
+              <TextBlock Text="信号处理" Foreground="White" FontSize="14" FontWeight="Bold" HorizontalAlignment="Center"/>
+              
+              <!-- 算法选择 -->
+              <StackPanel Orientation="Vertical" Spacing="5">
+                <TextBlock Text="处理算法:" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+                <ComboBox Name="cmbAlgorithmType" SelectedIndex="{Binding SelectedAlgorithmIndex}" MinWidth="200">
+                  <ComboBoxItem Content="无处理（原始信号）"/>
+                  <ComboBoxItem Content="简单移动平均"/>
+                  <ComboBoxItem Content="高斯滤波"/>
+                  <ComboBoxItem Content="外部算法（.xtj/.xtjs/.dll）"/>
+                </ComboBox>
+              </StackPanel>
+
+              <!-- 内置算法参数（单列） -->
+              <StackPanel Name="builtinAlgorithmParams" Orientation="Vertical" Spacing="8" 
+                         IsVisible="{Binding IsBuiltinAlgorithmSelected}">
+                
+                <!-- 移动平均算法参数（单列） -->
+                <StackPanel Name="movingAverageParams" Orientation="Vertical" Spacing="5"
+                           IsVisible="{Binding IsMovingAverageSelected}">
+                  <TextBlock Text="移动平均参数:" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+                  <TextBlock Text="窗口大小:" Foreground="White" FontSize="11"/>
+                  <Slider Minimum="3" Maximum="15" Value="{Binding MovingAverageWindowSize}" 
+                           TickFrequency="1" IsSnapToTickEnabled="True"/>
+                  <TextBlock Text="滤波强度:" Foreground="White" FontSize="11" Margin="0,6,0,0"/>
+                  <Slider Minimum="0.1" Maximum="2.0" Value="{Binding MovingAverageStrength}" 
+                           SmallChange="0.1" LargeChange="0.5"/>
+                </StackPanel>
+
+                <!-- 高斯滤波算法参数（单列） -->
+                <StackPanel Name="gaussianParams" Orientation="Vertical" Spacing="5"
+                           IsVisible="{Binding IsGaussianSelected}">
+                  <TextBlock Text="高斯滤波参数:" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+                  <TextBlock Text="窗口大小:" Foreground="White" FontSize="11"/>
+                  <Slider Minimum="3" Maximum="15" Value="{Binding GaussianWindowSize}" 
+                           TickFrequency="1" IsSnapToTickEnabled="True"/>
+                  <TextBlock Text="标准差:" Foreground="White" FontSize="11" Margin="0,6,0,0"/>
+                  <Slider Minimum="0.5" Maximum="3.0" Value="{Binding GaussianSigma}" 
+                           SmallChange="0.1" LargeChange="0.5"/>
+                </StackPanel>
+              </StackPanel>
+
+              <!-- 外部算法面板（单列） -->
+              <StackPanel Name="externalAlgorithmPanel" Orientation="Vertical" Spacing="5"
+                         IsVisible="{Binding IsExternalAlgorithmSelected}">
+                <TextBlock Text="外部算法:" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+                <TextBox Name="txtAlgorithmFile" Text="{Binding ExternalAlgorithmPath}" 
+                         Watermark="选择算法文件 (.xtj/.xtjs)" IsReadOnly="True" TextWrapping="Wrap"
+                         HorizontalAlignment="Stretch" MinHeight="30"/>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button Name="btnBrowseAlgorithm" Content="浏览" Padding="8,4"/>
+                  <Button Name="btnTestAlgorithm" Content="测试" Padding="8,4"/>
+                </StackPanel>
+              </StackPanel>
+
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+  </Border>
+</UserControl>

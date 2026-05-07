@@ -1,0 +1,73 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="200" d:DesignHeight="150"
+             x:Class="NewAvalonia.Views.ControlGroupBorderView">
+    
+    <UserControl.Styles>
+        <Style Selector="Border.groupBorder">
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="CornerRadius" Value="5"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="IsHitTestVisible" Value="True"/>
+        </Style>
+        
+        <Style Selector="Border.groupBorder.none">
+            <Setter Property="BorderBrush" Value="Gray"/>
+            <Setter Property="Opacity" Value="0.6"/>
+        </Style>
+        
+        <Style Selector="Border.groupBorder.sinwave">
+            <Setter Property="BorderBrush" Value="Purple"/>
+            <Setter Property="Opacity" Value="0.8"/>
+        </Style>
+        
+        <Style Selector="Border.groupBorder.squarewave">
+            <Setter Property="BorderBrush" Value="Purple"/>
+            <Setter Property="Opacity" Value="0.8"/>
+        </Style>
+        
+        <Style Selector="Button.groupLabel">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Padding" Value="3,1"/>
+            <Setter Property="Margin" Value="5,0,0,0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="CornerRadius" Value="3"/>
+        </Style>
+        
+        <Style Selector="Button.groupLabel.none">
+            <Setter Property="Foreground" Value="Gray"/>
+        </Style>
+        
+        <Style Selector="Button.groupLabel.sinwave">
+            <Setter Property="Foreground" Value="Purple"/>
+        </Style>
+        
+        <Style Selector="Button.groupLabel.squarewave">
+            <Setter Property="Foreground" Value="Purple"/>
+        </Style>
+        
+        <Style Selector="Button.groupLabel:pointerover">
+            <Setter Property="Background" Value="#F0F0F0"/>
+        </Style>
+    </UserControl.Styles>
+    
+    <Grid>
+        <Border Name="groupBorder" 
+                Classes="groupBorder none"/>
+        
+        <Button Name="groupLabel" 
+                Classes="groupLabel none"
+                Content="控件组"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Background="Transparent"
+                BorderThickness="0"
+                Padding="3,1"
+                Margin="5,0,0,0"
+                Cursor="Hand"/>
+    </Grid>
+</UserControl>

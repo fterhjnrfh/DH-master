@@ -1,0 +1,136 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="300"
+        x:Class="NewAvalonia.Views.WorkingLogicSelectionDialog"
+        Title="选择工作逻辑"
+        Width="400" Height="300"
+        MinWidth="350" MinHeight="250"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+    
+    <Window.Styles>
+        <Style Selector="ListBoxItem">
+            <Setter Property="Padding" Value="10"/>
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="LightGray"/>
+            <Setter Property="CornerRadius" Value="5"/>
+        </Style>
+        
+        <Style Selector="ListBoxItem:selected">
+            <Setter Property="Background" Value="#E3F2FD"/>
+            <Setter Property="BorderBrush" Value="#2196F3"/>
+        </Style>
+        
+        <Style Selector="ListBoxItem:pointerover">
+            <Setter Property="Background" Value="#F5F5F5"/>
+        </Style>
+        
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="#2196F3"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="CornerRadius" Value="5"/>
+            <Setter Property="Padding" Value="20,8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        
+        <Style Selector="Button.secondary">
+            <Setter Property="Background" Value="#F5F5F5"/>
+            <Setter Property="Foreground" Value="#333"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#CCC"/>
+            <Setter Property="CornerRadius" Value="5"/>
+            <Setter Property="Padding" Value="20,8"/>
+        </Style>
+    </Window.Styles>
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- 标题和说明 -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,15">
+            <TextBlock Text="工作逻辑选择" 
+                       FontSize="18" 
+                       FontWeight="Bold" 
+                       Margin="0,0,0,5"/>
+            <TextBlock Text="请选择适合当前控件组的工作逻辑：" 
+                       FontSize="12" 
+                       Foreground="#666"/>
+        </StackPanel>
+        
+        <!-- 工作逻辑列表 -->
+        <Border Grid.Row="1" 
+                BorderThickness="1" 
+                BorderBrush="#DDD" 
+                CornerRadius="5" 
+                Background="White">
+            <ScrollViewer>
+                <ListBox Name="logicListBox" 
+                         Background="Transparent" 
+                         BorderThickness="0"
+                         SelectionMode="Single">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" 
+                                           FontWeight="SemiBold" 
+                                           FontSize="14"
+                                           Foreground="Black"/>
+                                <TextBlock Text="{Binding Description}" 
+                                           FontSize="12" 
+                                           Foreground="#666" 
+                                           TextWrapping="Wrap" 
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </ScrollViewer>
+        </Border>
+        
+        <!-- 空状态提示 -->
+        <StackPanel Name="emptyStatePanel" 
+                    Grid.Row="1" 
+                    HorizontalAlignment="Center" 
+                    VerticalAlignment="Center" 
+                    IsVisible="False">
+            <TextBlock Text="😔" 
+                       FontSize="32" 
+                       HorizontalAlignment="Center" 
+                       Margin="0,0,0,10"/>
+            <TextBlock Text="当前控件组没有可用的工作逻辑" 
+                       FontSize="14" 
+                       Foreground="#666" 
+                       HorizontalAlignment="Center"/>
+            <TextBlock Text="请尝试调整控件组的组成" 
+                       FontSize="12" 
+                       Foreground="#999" 
+                       HorizontalAlignment="Center" 
+                       Margin="0,5,0,0"/>
+        </StackPanel>
+        
+        <!-- 按钮区域 -->
+        <StackPanel Grid.Row="3" 
+                    Orientation="Horizontal" 
+                    HorizontalAlignment="Right" 
+                    Margin="0,15,0,0">
+            <Button Name="cancelButton" 
+                    Content="取消" 
+                    Classes="secondary" 
+                    Margin="0,0,10,0"/>
+            <Button Name="confirmButton" 
+                    Content="确定" 
+                    Classes="primary" 
+                    IsEnabled="False"/>
+        </StackPanel>
+    </Grid>
+</Window>

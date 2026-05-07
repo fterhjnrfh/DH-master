@@ -1,0 +1,2 @@
+2026-05-06 13:41:05.085 | source=MainWindow.SelectPanel | target=panel-0 | selectedCount=0 | detail=
+2026-05-06 13:41:05.086 | source=MainWindow.SyncControlsToSelectedView | target=GlobalChannelSelector<=panel-0 | selectedCount=0 | detail=

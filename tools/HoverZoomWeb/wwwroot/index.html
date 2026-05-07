@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hover Wheel Zoom Demo</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>悬停点缩放演示（滚轮缩放，以鼠标为中心）</h1>
+      <p>默认缩放范围 0.5× – 3×；按住 Ctrl/Shift + 滚轮也可缩放。仅作用于悬停元素，不影响其他元素。</p>
+    </header>
+    <main>
+      <div id="zoom-container" class="grid">
+        <div class="card" data-zoomable>
+          <canvas class="axes"></canvas>
+          <div class="content">卡片 1</div>
+        </div>
+        <div class="card" data-zoomable>
+          <canvas class="axes"></canvas>
+          <div class="content">卡片 2</div>
+        </div>
+        <div class="card" data-zoomable>
+          <canvas class="axes"></canvas>
+          <div class="content">卡片 3</div>
+        </div>
+        <div class="card" data-zoomable>
+          <canvas class="axes"></canvas>
+          <div class="content">卡片 4</div>
+        </div>
+        <div class="card" data-zoomable>
+          <canvas class="axes"></canvas>
+          <div class="content">卡片 5</div>
+        </div>
+        <div class="card" data-zoomable>
+          <canvas class="axes"></canvas>
+          <div class="content">卡片 6</div>
+        </div>
+      </div>
+    </main>
+
+    <script src="main.js"></script>
+  </body>
+  </html>

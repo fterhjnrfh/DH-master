@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:DH.Client.App.ViewModels"
+             xmlns:local="clr-namespace:DH.Client.App.Controls"
+             x:Class="DH.Client.App.Views.TdmsViewerView"
+             x:DataType="vm:TdmsViewerViewModel"
+             mc:Ignorable="d">
+  <Grid RowDefinitions="Auto,*,Auto">
+    <!-- 顶部控制区域 -->
+    <Border Grid.Row="0" Background="#F5F5F5" Padding="8,6" BorderBrush="#DDD" BorderThickness="0,0,0,1">
+      <Grid RowDefinitions="Auto,Auto,Auto">
+        <!-- 第一行：会话与操作 -->
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,0,0,6">
+          <TextBlock Grid.Column="0" Text="TDMS会话:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
+          <TextBlock Text="{Binding SelectedFile}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" 
+                     Grid.Column="1"
+                     Foreground="#333" VerticalAlignment="Center"
+                     ToolTip.Tip="{Binding SelectedFile}"/>
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" Margin="8,0,0,0">
+            <Button Content="选择会话..." Click="OnPickSessionClicked" Padding="10,4"/>
+            <Button Content="选择文件..." Click="OnPickFileClicked" Padding="10,4"/>
+            <Button Content="绘制" Command="{Binding PlotSelectedChannelsCommand}"
+                    Padding="14,5" Background="#2196F3" Foreground="White" FontWeight="SemiBold"/>
+            <Button Content="重置" Click="OnResetViewClicked" Padding="10,4"/>
+            <Button Content="末端" Click="OnJumpToEndClicked" Padding="10,4"/>
+          </StackPanel>
+          <TextBlock Grid.Column="3"
+                     Text="{Binding StatusMessage}"
+                     VerticalAlignment="Center"
+                     Foreground="#666"
+                     TextTrimming="CharacterEllipsis"
+                     MaxWidth="280"
+                     Margin="12,0,0,0"/>
+          <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="12,0,0,0" IsVisible="{Binding IsJumping}">
+            <ProgressBar Width="120" Minimum="0" Maximum="100" Value="{Binding JumpProgress}"/>
+          </StackPanel>
+        </Grid>
+        
+        <!-- 第二行：设备与通道选择 -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,2*" Margin="0,0,0,6">
+          <StackPanel Grid.Column="0" Orientation="Vertical" Margin="0,0,8,0">
+            <TextBlock Text="设备" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <Button Content="全选" Command="{Binding SelectAllDevicesCommand}" Padding="7,3" FontSize="11"/>
+              <Button Content="全不选" Command="{Binding DeselectAllDevicesCommand}" Padding="7,3" FontSize="11"/>
+            </StackPanel>
+          </StackPanel>
+          <Border Grid.Column="1" BorderBrush="#CCC" BorderThickness="1" CornerRadius="4" Background="White"
+                  MinWidth="260" Padding="3" Margin="0,0,14,0">
+            <ScrollViewer MaxHeight="72" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <ItemsControl ItemsSource="{Binding DeviceSelectionItems}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel Orientation="Horizontal"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="4,2" Padding="3,1" FontSize="11">
+                      <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center"/>
+                    </CheckBox>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Border>
+
+          <StackPanel Grid.Column="2" Orientation="Vertical" Margin="0,0,8,0">
+            <TextBlock Text="通道" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <Button Content="全选" Command="{Binding SelectAllChannelsCommand}" Padding="7,3" FontSize="11"/>
+              <Button Content="全不选" Command="{Binding DeselectAllChannelsCommand}" Padding="7,3" FontSize="11"/>
+            </StackPanel>
+          </StackPanel>
+          <Border Grid.Column="3" BorderBrush="#CCC" BorderThickness="1" CornerRadius="4" Background="White"
+                  MinWidth="480" Padding="3">
+            <ScrollViewer MaxHeight="72" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <ItemsControl ItemsSource="{Binding ChannelSelectionItems}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel Orientation="Horizontal"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="3,1" Padding="3,1" FontSize="11">
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Border Width="10" Height="10" Background="{Binding ColorBrush}" CornerRadius="2"/>
+                        <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </CheckBox>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Border>
+        </Grid>
+
+        <!-- 第三行：统计 -->
+        <Grid Grid.Row="2" RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,*">
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="统计:" VerticalAlignment="Top" Foreground="#666" Margin="0,4,8,0"/>
+          <Border Grid.Row="0"
+                  Grid.Column="1"
+                  BorderBrush="#DDD"
+                  BorderThickness="1"
+                  Background="White"
+                  Padding="4">
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto"
+                          MaxHeight="78">
+              <ItemsControl ItemsSource="{Binding ReplayStatisticsItems}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <UniformGrid Columns="4"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border BorderBrush="#E6E6E6"
+                            BorderThickness="1"
+                            CornerRadius="3"
+                            Padding="5,2"
+                            Margin="2"
+                            ToolTip.Tip="{Binding ToolTipText}">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="{Binding DeviceName}"
+                                   FontWeight="SemiBold"
+                                   Foreground="#333"/>
+                        <TextBlock Text="{Binding ChannelName}"
+                                   FontWeight="SemiBold"
+                                   Foreground="#333"/>
+                        <TextBlock Text="{Binding MinText}"
+                                   Foreground="#555"
+                                   FontFamily="Consolas,Courier New,monospace"/>
+                        <TextBlock Text="{Binding MaxText}"
+                                   Foreground="#555"
+                                   FontFamily="Consolas,Courier New,monospace"/>
+                        <TextBlock Text="{Binding StdDevText}"
+                                   Foreground="#555"
+                                   FontFamily="Consolas,Courier New,monospace"/>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Border>
+          <TextBlock Grid.Row="1"
+                     Grid.Column="0"
+                     Text="光标:"
+                     VerticalAlignment="Top"
+                     Foreground="#666"
+                     Margin="0,6,8,0"
+                     IsVisible="{Binding HasSingleCursor}"/>
+          <Border Grid.Row="1"
+                  Grid.Column="1"
+                  BorderBrush="#DDD"
+                  BorderThickness="1"
+                  Background="White"
+                  Padding="4"
+                  Margin="0,4,0,0"
+                  IsVisible="{Binding HasSingleCursor}">
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Grid.Column="0"
+                         Text="{Binding ReplayCursorText}"
+                         VerticalAlignment="Top"
+                         Foreground="#444"
+                         FontFamily="Consolas,Courier New,monospace"
+                         TextTrimming="CharacterEllipsis"
+                         MaxWidth="220"
+                         Margin="0,1,10,0"
+                         ToolTip.Tip="{Binding ReplayCursorText}"/>
+              <ScrollViewer Grid.Column="1"
+                            HorizontalScrollBarVisibility="Disabled"
+                            VerticalScrollBarVisibility="Auto"
+                            MaxHeight="54">
+                <ItemsControl ItemsSource="{Binding ReplayCursorValueItems}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <UniformGrid Columns="4"/>
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border BorderBrush="#E6E6E6"
+                              BorderThickness="1"
+                              CornerRadius="3"
+                              Padding="5,2"
+                              Margin="2"
+                              ToolTip.Tip="{Binding ToolTipText}">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                          <TextBlock Text="{Binding DeviceName}" FontWeight="SemiBold" Foreground="#333"/>
+                          <TextBlock Text="{Binding ChannelName}" FontWeight="SemiBold" Foreground="#333"/>
+                          <TextBlock Text="{Binding ValueText}"
+                                     Foreground="#555"
+                                     FontFamily="Consolas,Courier New,monospace"/>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Grid>
+          </Border>
+        </Grid>
+      </Grid>
+    </Border>
+
+    <!-- 曲线视图 -->
+    <Grid Grid.Row="1">
+      <local:SkiaMultiChannelView x:Name="TdmsCurveView"/>
+      
+      <!-- 空状态提示 -->
+      <Border Background="#F8F8F8" IsVisible="{Binding !HasPlottedData}" HorizontalAlignment="Center" 
+              VerticalAlignment="Center" Padding="40,30" CornerRadius="8">
+        <StackPanel Spacing="12" HorizontalAlignment="Center">
+          <TextBlock Text="请选择TDMS会话或文件、设备和通道，然后点击绘制按钮"
+                     FontSize="14" Foreground="#888" HorizontalAlignment="Center"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <Border Grid.Row="2"
+            Background="#F5F5F5"
+            BorderBrush="#DDD"
+            BorderThickness="0,1,0,0"
+            Padding="12,8"
+            IsVisible="{Binding HasPersistedReplay}">
+      <Grid RowDefinitions="Auto,72" ColumnDefinitions="Auto,*">
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="总览" VerticalAlignment="Center" Foreground="#555" Margin="0,0,10,6"/>
+        <TextBlock Grid.Row="0"
+                   Grid.Column="1"
+                   Text="{Binding ReplayWindowText}"
+                   VerticalAlignment="Center"
+                   Foreground="#555"
+                   FontFamily="Consolas,Courier New,monospace"
+                   Margin="0,0,0,6"/>
+        <Border Grid.Row="1" Grid.ColumnSpan="2" BorderBrush="#C8C8C8" BorderThickness="1" Background="White">
+          <Grid>
+            <local:SkiaMultiChannelView x:Name="ReplayOverviewView"/>
+            <local:ReplayNavigatorOverlay x:Name="ReplayOverviewOverlay"
+                                          TotalDurationSeconds="{Binding ReplayTotalDurationSeconds}"
+                                          WindowStartSeconds="{Binding ReplayWindowStartSeconds}"
+                                          WindowEndSeconds="{Binding ReplayWindowEndSeconds}"/>
+          </Grid>
+        </Border>
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

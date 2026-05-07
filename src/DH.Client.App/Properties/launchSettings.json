@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "DH.Client.App": {
+      "commandName": "Project"
+    }
+  }
+}

@@ -1,0 +1,1 @@
+dotnet nuget add source https://nuget.avaloniaui.net/repository/avalonia-all/index.json -n avalonia

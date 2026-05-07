@@ -1,0 +1,31 @@
+# .gitignore for DH project
+# Build and output directories
+bin/
+obj/
+build/
+publish/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# VS Code settings
+.vscode/
+.vs/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Others
+*.tmp
+*.bak
+*.swp
+
+# Ignore data and download folders (customize as needed)
+/data/

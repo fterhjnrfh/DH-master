@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="DH.Client.App.Views.SenderPanel">
+  <StackPanel Margin="10" Spacing="8">
+    <TextBlock Text="发送端" FontWeight="Bold" FontSize="16"/>
+    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+      <TextBlock Text="IP" VerticalAlignment="Center"/>
+      <TextBox x:Name="IpBox" Width="140" Text="127.0.0.1"/>
+      <TextBlock Text="Port" VerticalAlignment="Center"/>
+      <TextBox x:Name="PortBox" Width="80" Text="4008"/>
+      <Button Content="连接" Click="OnConnect" Background="#28a745" Foreground="White"/>
+      <Button Content="断开" Click="OnDisconnect" Background="#dc3545" Foreground="White"/>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+      <TextBlock Text="通道数" VerticalAlignment="Center"/>
+      <NumericUpDown x:Name="ChCountBox" Minimum="1" Maximum="64" Value="2" Width="100"/>
+      <TextBlock Text="每包点数" VerticalAlignment="Center"/>
+      <NumericUpDown x:Name="PktCountBox" Minimum="1" Maximum="4096" Value="128" Width="120"/>
+      <TextBlock Text="名称串" VerticalAlignment="Center"/>
+      <TextBox x:Name="NamesBox" Width="300" Text="AI1-01,mV|AI1-02,mV"/>
+    </StackPanel>
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Content="发送一次" Click="OnSendOnce" Background="#007bff" Foreground="White"/>
+      <Button Content="开始连续发送" Click="OnStartStream" Background="#6f42c1" Foreground="White"/>
+      <Button Content="停止连续发送" Click="OnStopStream" Background="#fd7e14" Foreground="White"/>
+    </StackPanel>
+    <TextBlock x:Name="StatusText" Text="未连接"/>
+  </StackPanel>
+</UserControl>

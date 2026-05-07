@@ -1,0 +1,10 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:NewAvalonia.Controls"
+             xmlns:views="using:NewAvalonia.Views"
+             x:Class="NewAvalonia.Controls.SimplifiedWaveformDisplay">
+  <Grid>
+    <!-- 波形显示区域 -->
+    <views:AlgorithmCapableTcpRealtimeWaveformControl Name="TcpWaveformControl"/>
+  </Grid>
+</UserControl>

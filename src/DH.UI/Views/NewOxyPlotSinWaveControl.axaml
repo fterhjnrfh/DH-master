@@ -1,0 +1,150 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:oxy="clr-namespace:OxyPlot.Avalonia;assembly=OxyPlot.Avalonia"
+             xmlns:vm="using:NewAvalonia.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+             x:Class="NewAvalonia.Views.NewOxyPlotSinWaveControl"
+             x:DataType="vm:NewOxyPlotSinWaveViewModel">
+
+  <Design.DataContext>
+    <vm:NewOxyPlotSinWaveViewModel/>
+  </Design.DataContext>
+
+  <Border Background="#2D2D30" CornerRadius="8" Padding="15">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+
+      <!-- 波形显示区域 -->
+      <Border Grid.Row="0" Background="Black" CornerRadius="5" Padding="5" Margin="0,0,0,15">
+        <oxy:PlotView Model="{Binding PlotModel}" 
+                      Controller="{Binding PlotController}"
+                      MinWidth="700"
+                      Background="Black"/>
+      </Border>
+
+      <!-- 控制面板 -->
+      <Border Grid.Row="1" Background="#3C3C3C" CornerRadius="5" Padding="20">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="15"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <!-- 参数控制区域 -->
+          <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="20"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="20"/>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="20"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 波幅控制 -->
+            <StackPanel Grid.Column="0">
+              <TextBlock Text="波幅 (A)" Foreground="White" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+              <TextBox Text="{Binding Amplitude}" 
+                       Background="#4A4A4A" 
+                       Foreground="White" 
+                       BorderBrush="#666666"
+                       BorderThickness="1"
+                       CornerRadius="3"
+                       Padding="8,6"
+                       FontSize="13"/>
+            </StackPanel>
+
+            <!-- 频率控制 -->
+            <StackPanel Grid.Column="2">
+              <TextBlock Text="频率 (f)" Foreground="White" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+              <TextBox Text="{Binding Frequency}" 
+                       Background="#4A4A4A" 
+                       Foreground="White" 
+                       BorderBrush="#666666"
+                       BorderThickness="1"
+                       CornerRadius="3"
+                       Padding="8,6"
+                       FontSize="13"/>
+            </StackPanel>
+
+            <!-- 速度控制 -->
+            <StackPanel Grid.Column="4">
+              <TextBlock Text="速度 (v)" Foreground="White" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+              <TextBox Text="{Binding Speed}" 
+                       Background="#4A4A4A" 
+                       Foreground="White" 
+                       BorderBrush="#666666"
+                       BorderThickness="1"
+                       CornerRadius="3"
+                       Padding="8,6"
+                       FontSize="13"/>
+            </StackPanel>
+
+            <!-- 颜色选择 -->
+            <StackPanel Grid.Column="6">
+              <TextBlock Text="颜色" Foreground="White" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+              <ComboBox SelectedIndex="{Binding SelectedColorIndex}"
+                        Background="#4A4A4A" 
+                        Foreground="White" 
+                        BorderBrush="#666666"
+                        BorderThickness="1"
+                        CornerRadius="3"
+                        Padding="8,6"
+                        FontSize="13">
+                <ComboBoxItem Content="红色"/>
+                <ComboBoxItem Content="绿色"/>
+                <ComboBoxItem Content="蓝色"/>
+                <ComboBoxItem Content="黄色"/>
+                <ComboBoxItem Content="紫色"/>
+                <ComboBoxItem Content="青色"/>
+                <ComboBoxItem Content="白色"/>
+              </ComboBox>
+            </StackPanel>
+          </Grid>
+
+          <!-- 控制按钮区域 -->
+          <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center">
+            <Button Content="开始" 
+                    Command="{Binding StartCommand}"
+                    Background="#0E7A0D" 
+                    Foreground="White" 
+                    BorderThickness="0"
+                    CornerRadius="5"
+                    Padding="20,8"
+                    FontSize="14"
+                    FontWeight="SemiBold"
+                    Margin="0,0,10,0"/>
+            
+            <Button Content="暂停" 
+                    Command="{Binding PauseCommand}"
+                    Background="#CC6A00" 
+                    Foreground="White" 
+                    BorderThickness="0"
+                    CornerRadius="5"
+                    Padding="20,8"
+                    FontSize="14"
+                    FontWeight="SemiBold"
+                    Margin="0,0,10,0"/>
+            
+            <Button Content="停止" 
+                    Command="{Binding StopCommand}"
+                    Background="#C42B1C" 
+                    Foreground="White" 
+                    BorderThickness="0"
+                    CornerRadius="5"
+                    Padding="20,8"
+                    FontSize="14"
+                    FontWeight="SemiBold"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+  </Border>
+</UserControl>

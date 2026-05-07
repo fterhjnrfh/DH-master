@@ -1,0 +1,65 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:NewAvalonia.Views"
+             x:Class="NewAvalonia.Views.GPUAcceleratedWaveformControl">
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+    
+    <!-- 控制面板 第一行 -->
+    <StackPanel Grid.Row="0" 
+                Orientation="Horizontal" 
+                Margin="10" 
+                Spacing="10">
+      <Button Name="AddWaveformBtn" 
+              Content="添加单个波形" 
+              Height="30"/>
+      <Button Name="AddManyWaveformsBtn" 
+              Content="添加50个波形" 
+              Height="30"/>
+      <Button Name="ClearWaveformsBtn" 
+              Content="清空波形" 
+              Height="30"/>
+      <Button Name="TestPerformanceBtn" 
+              Content="测试性能" 
+              Height="30"/>
+    </StackPanel>
+    
+    <!-- 状态显示 第二行 -->
+    <StackPanel Grid.Row="1" 
+                Orientation="Horizontal" 
+                Margin="10" 
+                Spacing="20">
+      <TextBlock Name="WaveformCountText" 
+                 Text="波形数量: 0" 
+                 VerticalAlignment="Center"
+                 FontSize="12"/>
+      <TextBlock Name="GpuStatusText" 
+                 Text="GPU 状态: 尚未初始化" 
+                 VerticalAlignment="Center"
+                 FontSize="12"/>
+      <TextBlock Name="PerformanceText" 
+                 Text="性能: 等待测试" 
+                 VerticalAlignment="Center"
+                 FontSize="12"/>
+    </StackPanel>
+    
+    <!-- 说明标签 第三行 -->
+    <TextBlock Grid.Row="2" 
+               Text="提示: 使用'添加50个波形'按钮进行压力测试，然后点击'测试性能'来验证GPU加速效果" 
+               Margin="10,0,10,10"
+               TextWrapping="Wrap"
+               FontSize="11"
+               Foreground="Gray"/>
+    
+    <!-- GPU 加速波形画布 -->
+    <local:GPUAcceleratedWaveformCanvas 
+      x:Name="WaveformCanvas"
+      Grid.Row="3"
+      Margin="10"/>
+  </Grid>
+</UserControl>

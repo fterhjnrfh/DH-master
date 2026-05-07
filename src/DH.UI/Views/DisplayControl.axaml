@@ -1,0 +1,14 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:oxy="http://oxyplot.org/avalonia"
+             xmlns:vm="using:NewAvalonia.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="200"
+             x:Class="NewAvalonia.Views.DisplayControl"
+             x:DataType="vm:DisplayControlViewModel">
+    <!-- 波形显示区域 -->
+    <Border Background="Black" CornerRadius="5" Padding="5">
+        <oxy:PlotView Model="{Binding PlotModel}" Controller="{Binding PlotController}" Background="Black"/>
+    </Border>
+</UserControl>

@@ -1,0 +1,14 @@
+{
+  "name": "GaussianLikeSmooth (External)",
+  "description": "外部脚本：近似高斯平滑（一维可分离核，标准差可调）",
+  "version": "1.0.0",
+  "author": "Demo",
+  "parameters": {
+    "sigma": { "default": 5.0, "min": 0.5, "max": 20.0 },
+    "kernelSize": { "default": 31, "min": 5, "max": 301 }
+  },
+  "algorithm": {
+    "type": "csharp",
+    "code": "public static double[] Process(double[] input, IDictionary<string, object> parameters)\n{\n    if (input == null || input.Length == 0) return input;\n    double sigma = Convert.ToDouble(parameters.ContainsKey(\"sigma\") ? parameters[\"sigma\"] : 5.0);\n    int kernelSize = Convert.ToInt32(parameters.ContainsKey(\"kernelSize\") ? parameters[\"kernelSize\"] : 31);\n    if (kernelSize < 5) kernelSize = 5;\n    if (kernelSize % 2 == 0) kernelSize++;\n    int half = kernelSize / 2;\n    // 构建一维高斯核\n    double twoSigma2 = 2 * sigma * sigma;\n    var kernel = new double[kernelSize];\n    double sum = 0;\n    for (int i = -half, idx = 0; i <= half; i++, idx++) {\n        double v = Math.Exp(-(i * i) / twoSigma2);\n        kernel[idx] = v;\n        sum += v;\n    }\n    for (int i = 0; i < kernel.Length; i++) kernel[i] /= sum;\n    // 边界处理：镜像法\n    double Mirror(double[] arr, int index) {\n        if (index < 0) return arr[-index];\n        if (index >= arr.Length) return arr[2 * arr.Length - index - 2];\n        return arr[index];\n    }\n    var output = new double[input.Length];\n    for (int i = 0; i < input.Length; i++)\n    {\n        double acc = 0;\n        for (int k = -half, idx = 0; k <= half; k++, idx++) {\n            acc += kernel[idx] * Mirror(input, i + k);\n        }\n        output[i] = acc;\n    }\n    return output;\n}\n"
+  }
+}

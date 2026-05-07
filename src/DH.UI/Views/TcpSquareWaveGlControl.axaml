@@ -1,0 +1,21 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:NewAvalonia.Views"
+             x:Class="NewAvalonia.Views.TcpSquareWaveGlControl"
+             Height="420"
+             MinWidth="880">
+  <Border Background="#1E1E1E" CornerRadius="8" Padding="16">
+    <Grid RowDefinitions="*,Auto" Margin="0,0,0,12">
+      <local:TcpSquareWaveGlCanvas x:Name="SignalCanvas"/>
+      <StackPanel Grid.Row="1" Spacing="4">
+        <TextBlock Text="TCP 方波 (GPU)" Foreground="#FFFFFF" FontSize="16" FontWeight="Bold"/>
+        <TextBlock Name="txtWindowRange"
+                   Text="当前时间段：0ms - 2000ms"
+                   Foreground="#80D9FF"/>
+        <TextBlock Text="此控件仿照 GPU 模拟信号 (GL)，使用固定 50ms 周期模拟 TCP 方波并按 2 秒窗口滚动。"
+                   TextWrapping="Wrap"
+                   Foreground="#CCCCCC"/>
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

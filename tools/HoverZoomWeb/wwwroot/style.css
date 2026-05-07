@@ -1,0 +1,47 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: #0f1115; color: #e6e6e6; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Microsoft YaHei", sans-serif; }
+
+header { padding: 16px 20px; border-bottom: 1px solid #222; }
+header h1 { margin: 0 0 8px; font-size: 18px; }
+header p { margin: 0; color: #9aa0a6; font-size: 13px; }
+
+main { padding: 20px; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+.card {
+  position: relative;
+  background: #161a20;
+  border: 1px solid #222;
+  border-radius: 8px;
+  overflow: hidden;
+  height: 160px;
+  /* 初始不改变布局，仅使用 transform */
+  transform-origin: 0 0; /* 统一以左上为原点，便于 translate(px) scale 组合实现“以鼠标为中心”缩放 */
+  will-change: transform; /* 提示浏览器优化合成层 */
+}
+.card .axes {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none; /* 坐标层不拦截事件，确保不影响原功能 */
+}
+.card .content {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  color: #cbd5e1;
+  z-index: 1;
+}
+
+/* 细微视觉反馈 */
+.card:hover { border-color: #2a2f3a; box-shadow: 0 0 0 1px #2a2f3a inset; }
+
+@media (max-width: 640px) {
+  header h1 { font-size: 16px; }
+  .card { height: 140px; }
+}

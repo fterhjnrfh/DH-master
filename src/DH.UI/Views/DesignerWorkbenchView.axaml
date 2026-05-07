@@ -1,0 +1,272 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+         xmlns:flow="using:NewAvalonia.FlowEditor"
+         xmlns:vm="using:NewAvalonia.ViewModels"
+         mc:Ignorable="d" d:DesignWidth="1000" d:DesignHeight="600"
+         x:Class="NewAvalonia.Views.DesignerWorkbenchView">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- TabControl 包含所有功能 -->
+        <TabControl Grid.Row="0">
+            <!-- 第一个标签页：设计器 -->
+            <TabItem Header="设计器">
+                <!-- 主工作区：所有可拖拽内容放在这里，避免与顶部菜单重叠 -->
+                <Canvas Name="mainCanvas">
+            <!-- 设计画布 - 铺满可用工作区 -->
+            <Canvas Name="designCanvas" Background="White" 
+                    Width="{Binding #mainCanvas.Bounds.Width, FallbackValue=1000}" 
+                    Height="{Binding #mainCanvas.Bounds.Height, FallbackValue=600}">
+            </Canvas>
+            
+            <!-- 控件库悬浮窗口 -->
+            <Border Name="toolboxBorder" Background="Black" BorderBrush="Gray" BorderThickness="1" 
+                    Canvas.Left="10" Canvas.Top="10" Width="230">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- 可拖动标题栏 -->
+                    <Border Background="LightGray" Grid.Row="0" Height="30" Cursor="SizeAll" Name="toolboxHeader">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="控件库" VerticalAlignment="Center" Margin="10,0" Foreground="Black"/>
+                            <ToggleButton Name="toolboxToggle" Grid.Column="1" Content="-" Width="30" Height="30" Background="LightGray" Foreground="Black"/>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- 控件库内容 -->
+                    <StackPanel Grid.Row="1" Name="toolboxContent" Margin="10,8,10,10">
+                            <!-- 基础控件组 -->
+                            <Border Background="#2D2D30" CornerRadius="3" Padding="8,6" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="基础控件" Foreground="#CCCCCC" FontSize="11" FontWeight="Bold" Margin="0,0,0,8"/>
+                                    <Button Name="btnAddButton" Content="🔘 按钮" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddLabel" Content="🏷️ 标签" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddTextBox" Content="📝 文本框" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddCheckBox" Content="☑️ 复选框" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddComboBox" Content="📋 组合框" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddDisplayControl" Content="📊 显示屏" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                        <Button Name="btnAddDisplayControl2" Content="🖥️ 显示屏2" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555" IsVisible="False"/>
+                                </StackPanel>
+                            </Border>
+                            
+                            <!-- 高级控件组 -->
+                            <Border Background="#2D2D30" CornerRadius="3" Padding="8,6">
+                                <StackPanel>
+                                    <TextBlock Text="高级控件" Foreground="#CCCCCC" FontSize="11" FontWeight="Bold" Margin="0,0,0,8"/>
+                                    <Button Name="btnAddNewOxyPlotSinWave" Content="📈 OxyPlot正弦波" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddNewOpenGLSinWave" Content="🔷 SkiaSharp正弦波" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddSimulatedSignal" Content="🔬 模拟信号源 (CPU)" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddGLSimulatedSignal" Content="🔷 GPU模拟信号 (GL)" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddSkiaTcpSignalNew" Content="🧪 模拟TCP方波 (CPU)" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch" 
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddTcpSquareWaveGpu" Content="🧪 模拟TCP方波 (GPU)" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch"
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                                    <Button Name="btnAddTcpRealtimeWaveform" Content="🌐 实测TCP波形" Margin="0,1" Padding="8,5" HorizontalAlignment="Stretch"
+                                            Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+
+                                </StackPanel>
+                            </Border>
+                    </StackPanel>
+                </Grid>
+            </Border>
+            
+            <!-- 属性面板悬浮窗口 -->
+            <Border Name="propertyBorder" Background="Black" BorderBrush="Gray" BorderThickness="1" 
+                    Canvas.Left="740" Canvas.Top="10" Width="250">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- 可拖动标题栏 -->
+                    <Border Background="LightGray" Grid.Row="0" Height="30" Cursor="SizeAll" Name="propertyHeader">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="属性面板" VerticalAlignment="Center" Margin="10,0" Foreground="Black"/>
+                            <ToggleButton Name="propertyToggle" Grid.Column="1" Content="-" Width="30" Height="30" Background="LightGray" Foreground="Black"/>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- 属性面板内容 -->
+                    <ScrollViewer Grid.Row="1" Name="propertyContent" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="5">
+                            <TextBlock Text="名称:" Foreground="White"/>
+                            <TextBox Name="txtName" Margin="0,0,0,5"/>
+                            
+                            <TextBlock Text="宽度:" Foreground="White"/>
+                            <TextBox Name="txtWidth" Margin="0,0,0,5"/>
+                            
+                            <TextBlock Text="高度:" Foreground="White"/>
+                            <TextBox Name="txtHeight" Margin="0,0,0,5"/>
+                            
+                            <TextBlock Text="内容:" Foreground="White"/>
+                            <TextBox Name="txtContent" Margin="0,0,0,5"/>
+                            
+                            <TextBlock Text="左边:" Foreground="White"/>
+                            <TextBox Name="txtLeft" Margin="0,0,0,5"/>
+                            
+                            <TextBlock Text="顶边:" Foreground="White"/>
+                            <TextBox Name="txtTop" Margin="0,0,0,5"/>
+                            
+                            <!-- 添加文字颜色选择控件 -->
+                            <TextBlock Text="文字颜色:" Foreground="White"/>
+                            <ComboBox Name="cmbForegroundColor" Margin="0,0,0,5">
+                                <ComboBoxItem Content="黑色" Tag="Black"/>
+                                <ComboBoxItem Content="白色" Tag="White"/>
+                            </ComboBox>
+                            
+                            <!-- 控件组激活按钮 -->
+                            <Button Name="btnActivateGroup" Content="⚡ 激活工作逻辑" Margin="0,10,0,5" 
+                                    Background="#4CAF50" Foreground="White" BorderBrush="#45A049"
+                                    ToolTip.Tip="激活此控件组的工作逻辑" IsVisible="False"/>
+                            
+                            <!-- 取消工作逻辑按钮 -->
+                            <Button Name="btnDeactivateGroup" Content="❌ 取消工作逻辑" Margin="0,5,0,5" 
+                                    Background="#FF6B6B" Foreground="White" 
+                                    BorderBrush="#FF5252" 
+                                    ToolTip.Tip="取消选中控件组的工作逻辑" 
+                                    IsVisible="False" />
+                            
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0" Spacing="10">
+                                <Button Name="btnApply"
+                                        Content="保存"
+                                        Padding="12,6"
+                                        Background="#1E88E5"
+                                        Foreground="White"
+                                        BorderBrush="#1565C0"
+                                        CornerRadius="4"/>
+                                <Button Name="btnDelete"
+                                        Content="删除"
+                                        Padding="12,6"
+                                        Background="#E53935"
+                                        Foreground="White"
+                                        BorderBrush="#B71C1C"
+                                        CornerRadius="4"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+            
+            <!-- 底部按钮 -->
+            <Border Background="LightGray" BorderBrush="DarkGray" BorderThickness="1"
+                    Canvas.Right="20" 
+                    Canvas.Bottom="20">
+                <Button Name="btnRunPreview" Content="运行" Padding="10,5" Margin="5" 
+                        Background="LightGray" Foreground="Black"/>
+            </Border>
+        </Canvas>
+            </TabItem>
+            
+            <!-- 第二个标签页：流程图编辑器 -->
+            <TabItem Header="流程图编辑器">
+                <flow:FlowEditorControl Margin="5"/>
+            </TabItem>
+
+            <!-- 第三个标签页：算法加密工具 -->
+            <TabItem Header="算法加密">
+                <Border Background="#1E1E1E" Padding="20">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="批量加密 .xtj 算法文件" Foreground="White" FontSize="18" FontWeight="Bold"/>
+                        <TextBlock Text="选择一个或多个 .xtj 明文算法文件，系统会使用 AES-GCM 加密后生成同名 .xtjs 文件。" Foreground="#CCCCCC" TextWrapping="Wrap"/>
+                        <Button Name="btnEncryptXtj" Content="选择并加密 .xtj 文件" Width="260" Padding="10,6"
+                                Background="#3C3C3C" Foreground="White" BorderBrush="#555555"/>
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="使用提示" Foreground="#F0F0F0" FontWeight="Bold"/>
+                            <TextBlock Text="· 加密由 XtjCrypto (AES-GCM) 执行，输出文件与原始 .xtj 同目录。" Foreground="#AAAAAA" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 原始 .xtj 不会被修改，可随时重新加密。" Foreground="#AAAAAA" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 失败记录会写入控制台，请确认文件是否被占用。" Foreground="#AAAAAA" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
+            <!-- 第四个标签页：使用帮助 -->
+            <TabItem Header="帮助">
+                <ScrollViewer Margin="5">
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="使用指南" FontSize="20" FontWeight="Bold"/>
+                        <TextBlock Text="设计器：拖拽控件 → 调整布局 → 连接 → 激活工作逻辑 → 运行预览；流程图编辑器：放置节点 → 右键连线 → 设置参数 → 导出/清空。" TextWrapping="Wrap"/>
+
+                        <!-- 设计器详解 -->
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="设计器：界面搭建全流程" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="控件库" FontWeight="Bold"/>
+                            <TextBlock Text="基础控件：按钮、标签、文本框、复选框、组合框、显示屏。" TextWrapping="Wrap"/>
+                            <TextBlock Text="高级控件：OxyPlot 正弦波、SkiaSharp 正弦波、模拟信号源 (CPU)、GPU 模拟信号 (GL)、模拟 TCP 方波 (CPU/GPU)、实测 TCP 波形。" TextWrapping="Wrap"/>
+                            <TextBlock Text="拖拽与布局" FontWeight="Bold"/>
+                            <TextBlock Text="· 在控件库点击按钮，即可在画布当前视口生成对应控件；拖动控件即可微调位置。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 选择控件后，右侧属性面板可修改名称、宽高、位置、文本内容和前景色；点击“应用”保存，点击“删除”移除。" TextWrapping="Wrap"/>
+                            <TextBlock Text="连线与控件组" FontWeight="Bold"/>
+                            <TextBlock Text="· 每个控件中心提供连接点。点击一次进入连接模式（连接点变红），再点另一个控件即可连线，成功后转为绿色。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 再次点击已连接的两个控件可解除连线；右键连接线可以删除，控件组的外框会同步更新。" TextWrapping="Wrap"/>
+                            <TextBlock Text="激活工作逻辑" FontWeight="Bold"/>
+                            <TextBlock Text="· 选中任意已连成组的控件，属性面板会显示“激活工作逻辑”按钮。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 弹出的列表仅展示与当前控件组匹配的逻辑（如正弦波绘制器、GPU 波形预览等），选择后自动设置控件名称、默认值及预览控件。" TextWrapping="Wrap"/>
+                            <TextBlock Text="运行与调试" FontWeight="Bold"/>
+                            <TextBlock Text="· 点击右下角“运行”按钮进入实时预览窗口，可调整输入参数立即查看波形或业务逻辑反馈。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 未激活的控件组在运行窗口不会执行逻辑，必要时在属性面板重新激活或取消激活。" TextWrapping="Wrap"/>
+                            <TextBlock Text="实用技巧" FontWeight="Bold"/>
+                            <TextBlock Text="· 控件库 / 属性面板标题栏可以拖动位置并折叠。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 运行前可使用“取消工作逻辑”按钮将控件组恢复为未配置状态，以便重新排布。" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <!-- 流程图编辑器详解 -->
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="流程图编辑器：节点编排与导出" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="节点库" FontWeight="Bold"/>
+                            <TextBlock Text="包含 开始/结束、高斯滤波、中值滤波、移动平均、信号平滑 等节点模板，每个节点自带默认参数。" TextWrapping="Wrap"/>
+                            <TextBlock Text="放置与移动" FontWeight="Bold"/>
+                            <TextBlock Text="· 点击左侧节点模板，即可在画布点击位置生成节点；拖动节点可重新排布流程顺序。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 选中节点会在右侧属性面板展示所有参数，直接输入或使用 NumericUpDown 修改；点击“删除节点”可移除并刷新关联连线。" TextWrapping="Wrap"/>
+                            <TextBlock Text="连线规则" FontWeight="Bold"/>
+                            <TextBlock Text="· 右键节点进入连接模式（边框高亮），再右键目标节点即可建立 From→To 连接。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 连接线始终从节点中心发出，拖动节点会自动刷新连线位置。重复连接不会创建新线，需删除节点或清空画布来重建。" TextWrapping="Wrap"/>
+                            <TextBlock Text="导出与清空" FontWeight="Bold"/>
+                            <TextBlock Text="· “导出为DLL/SO” 会读取当前 FlowGraph 执行顺序，生成 C++/CUDA 代码并输出到 download/ 目录。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· “清空画布” 会删除所有节点、连接与参数配置，适合重新建模前使用。" TextWrapping="Wrap"/>
+                            <TextBlock Text="建模建议" FontWeight="Bold"/>
+                            <TextBlock Text="· 流程至少包含一个开始和结束节点；滤波节点可以串联多个形成自定义处理链。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 导出前确认每个节点参数（如窗口大小、Sigma、平滑度）符合真实算法需求。" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <!-- 通用问题 -->
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="常见问题" FontWeight="Bold" FontSize="18"/>
+                            <TextBlock Text="· 脚本/导出失败：先运行 run_with_env.bat 激活 MSVC 环境，再回到应用操作。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· GPU 控件空白：确保本机 GPU/驱动可用，必要时改用 CPU 版本控件。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 算法模块未出现：点击顶部“算法管理”检查 DLL 是否被发现，并确认实现了 IAlgorithm 接口。" TextWrapping="Wrap"/>
+                            <TextBlock Text="· 加密失败：确认 .xtj 文件未被占用，或在控制台查看 XtjCrypto 输出的异常。" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</UserControl>

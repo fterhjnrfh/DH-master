@@ -1,0 +1,24 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:NewAvalonia.Views"
+             x:Class="NewAvalonia.Views.TcpSquareWaveSkiaControl"
+             Height="420"
+             MinWidth="880">
+  <Border Background="#1E1E1E" CornerRadius="8" Padding="16">
+    <Grid RowDefinitions="*,Auto" Margin="0,0,0,12">
+      <local:TcpSquareWaveSkiaCanvas x:Name="TcpCanvas"/>
+      <StackPanel Grid.Row="1" Spacing="4">
+        <TextBlock Text="SkiaSharp 方波 TCP 信号 (GPU)" Foreground="#FFFFFF" FontSize="16" FontWeight="Bold"/>
+        <TextBlock Name="txtWindowRange"
+                   Text="当前时间段：0ms - 2000ms"
+                   Foreground="#B0FFC8"/>
+        <TextBlock Text="每 50ms 采样一次，模拟 TCP 包发送节奏，填满 2s 时间轴后立即切换到下一时段。"
+                   TextWrapping="Wrap"
+                   Foreground="#CCCCCC"/>
+        <TextBlock Text="以时间为横轴从左至右绘制，便于观察实时网络突发特征。"
+                   TextWrapping="Wrap"
+                   Foreground="#888888"/>
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

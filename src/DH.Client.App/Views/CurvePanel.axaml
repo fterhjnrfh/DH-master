@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:DH.Client.App.ViewModels"
+             xmlns:views="using:DH.Client.App.Views"
+             x:Class="DH.Client.App.Views.CurvePanel"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450">
+  <Grid>
+    <!-- 渲染容器，带阴影与圆角 -->
+    <Border x:Name="OpenGLContainer"
+            Background="#121212"
+            BorderBrush="#2B2B2B"
+            BorderThickness="1"
+            CornerRadius="8"
+            BoxShadow="0 2 12 0 #66000000">
+      <!-- 绘制控件将在代码中动态添加 -->
+    </Border>
+
+    <!-- 通道选择器面板 -->
+    <Border x:Name="ChannelSelectorPanel"
+            VerticalAlignment="Top"
+            HorizontalAlignment="Left"
+            Margin="8,50,8,0"
+            CornerRadius="6"
+            Background="#1E1E1EF0"
+            BorderBrush="#3A3A3A"
+            BorderThickness="1"
+            IsVisible="False"
+            MaxWidth="400">
+      <views:ChannelSelector x:Name="ChannelSelector"/>
+    </Border>
+
+    <!-- 顶部操作栏：通道与缩放控制，半透明背景（已迁移到主窗口顶栏，这里隐藏以避免遮挡曲线） -->
+    <Border VerticalAlignment="Top"
+            HorizontalAlignment="Stretch"
+            Margin="8,8,8,0"
+            CornerRadius="6"
+            Background="#262626CC"
+            BorderBrush="#3A3A3A"
+            BorderThickness="1"
+            Padding="8"
+            IsVisible="False">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+        <!-- 左侧：通道选择按钮 - 直接弹出选择框 -->
+        <Button x:Name="ToggleChannelSelectorButton"
+                Grid.Column="0"
+                Content="通道选择"
+                Width="100"
+                Height="32"
+                CornerRadius="6"
+                Background="#4A4A4A"
+                Foreground="White"
+                Margin="0,0,8,0">
+          <ToolTip.Tip>点击选择通道</ToolTip.Tip>
+          <Button.Flyout>
+            <Flyout Placement="Bottom" ShowMode="Standard">
+              <Border BorderBrush="#3A3A3A" BorderThickness="1" CornerRadius="8" 
+                      Background="#1E1E1E" MinWidth="450" MaxHeight="500">
+                <views:ChannelSelector x:Name="FlyoutChannelSelector"/>
+              </Border>
+            </Flyout>
+          </Button.Flyout>
+        </Button>
+
+        <!-- 选中通道显示 -->
+        <TextBlock x:Name="SelectedChannelsText"
+                   Grid.Column="1"
+                   Text="未选择通道"
+                   VerticalAlignment="Center"
+                   Foreground="#CCCCCC"
+                   FontSize="12"
+                   Margin="0,0,8,0"/>
+
+        <!-- 中间空白占位 -->
+        <Border Grid.Column="2"/>
+
+        <!-- 右侧：横轴和纵轴独立缩放控件 -->
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8">
+          <!-- 横轴缩放 -->
+          <Border Background="#3A3A3A" CornerRadius="4" Padding="6,4">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="X:" VerticalAlignment="Center" Foreground="#CCCCCC" FontSize="11"/>
+              <Button x:Name="ZoomInXButton"
+                      Content="+"
+                      Width="24"
+                      Height="24"
+                      CornerRadius="4"
+                      Background="#4A4A4A"
+                      Foreground="White"
+                      FontSize="12">
+                <ToolTip.Tip>横轴放大</ToolTip.Tip>
+              </Button>
+              <Button x:Name="ZoomOutXButton"
+                      Content="-"
+                      Width="24"
+                      Height="24"
+                      CornerRadius="4"
+                      Background="#4A4A4A"
+                      Foreground="White"
+                      FontSize="12">
+                <ToolTip.Tip>横轴缩小</ToolTip.Tip>
+              </Button>
+            </StackPanel>
+          </Border>
+          
+          <!-- 纵轴缩放 -->
+          <Border Background="#3A3A3A" CornerRadius="4" Padding="6,4">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="Y:" VerticalAlignment="Center" Foreground="#CCCCCC" FontSize="11"/>
+              <Button x:Name="ZoomInYButton"
+                      Content="+"
+                      Width="24"
+                      Height="24"
+                      CornerRadius="4"
+                      Background="#4A4A4A"
+                      Foreground="White"
+                      FontSize="12">
+                <ToolTip.Tip>纵轴放大</ToolTip.Tip>
+              </Button>
+              <Button x:Name="ZoomOutYButton"
+                      Content="-"
+                      Width="24"
+                      Height="24"
+                      CornerRadius="4"
+                      Background="#4A4A4A"
+                      Foreground="White"
+                      FontSize="12">
+                <ToolTip.Tip>纵轴缩小</ToolTip.Tip>
+              </Button>
+            </StackPanel>
+          </Border>
+          
+          <!-- 重置缩放 -->
+          <Button x:Name="ResetZoomButton"
+                  Content="重置"
+                  Width="48"
+                  Height="32"
+                  CornerRadius="6"
+                  Background="#4A4A4A"
+                  Foreground="White"
+                  FontSize="11">
+            <ToolTip.Tip>重置缩放</ToolTip.Tip>
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

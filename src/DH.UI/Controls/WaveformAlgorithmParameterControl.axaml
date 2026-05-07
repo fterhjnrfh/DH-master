@@ -1,0 +1,19 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="NewAvalonia.Controls.WaveformAlgorithmParameterControl"
+             Background="Transparent">
+  <Grid RowDefinitions="Auto,Auto,*">
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10" Margin="5">
+      <TextBlock Text="算法:" VerticalAlignment="Center" Foreground="White"/>
+      <ComboBox Name="AlgorithmComboBox" Width="200" HorizontalAlignment="Left"/>
+      <Button Name="ApplyButton" Content="应用参数" Background="#17A2B8" Foreground="White"/>
+      <Button Name="ResetButton" Content="重置" Background="#6C757D" Foreground="White"/>
+    </StackPanel>
+    
+    <TextBlock Grid.Row="1" Text="参数:" Margin="5,10,5,5" Foreground="White" FontWeight="Bold"/>
+    
+    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="5">
+      <StackPanel Name="ParameterPanel" Spacing="5"/>
+    </ScrollViewer>
+  </Grid>
+</UserControl>

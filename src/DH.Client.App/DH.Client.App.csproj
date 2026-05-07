@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0-windows7.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.0.10" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.0.10" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.10" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.0.10" />
+    <PackageReference Include="Avalonia.ReactiveUI" Version="11.0.10" />
+    <PackageReference Include="Avalonia.Skia" Version="11.0.10" />
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
+    <PackageReference Include="Snappier" Version="1.1.6" />
+    <PackageReference Include="SharpZipLib" Version="1.4.2" />
+    <PackageReference Include="SkiaSharp" Version="2.88.8" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
+    <PackageReference Include="ScottPlot.Avalonia" Version="4.1.*" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.0" />
+    <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.0.10">
+      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="TDMSReader" Version="3.1.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="6.0.28" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DH.Contracts\DH.Contracts.csproj" />
+    <ProjectReference Include="..\DH.Display\DH.Display.csproj" />
+    <ProjectReference Include="..\DH.Configmanage\DH.Configmanage.csproj" />
+    <ProjectReference Include="..\DH.Driver\DH.Driver.csproj" />
+    <ProjectReference Include="..\DH.UI\NewAvalonia.csproj" />
+  </ItemGroup>
+
+  <!-- 移除对 CurveRenderer.cs 的排除，启用 OpenGL 渲染器编译 -->
+  <!-- 原配置 <ItemGroup><Compile Remove="controls\CurveRenderer.cs" /></ItemGroup> 已删除 -->
+
+  <!-- 暂时排除使用 ScottPlot 5.x 或 Display.Realtime API 的文件以兼容 .NET 6.0 -->
+  <ItemGroup>
+    <Compile Remove="controls\SkiaPlotControl.cs" />
+  </ItemGroup>
+
+</Project>
