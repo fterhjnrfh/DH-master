@@ -1451,8 +1451,8 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                 return;
             }
 
-            _owner.LogDiagnostic(
-                $"tdms-segment-prepared source={SourceId} segment={chunk.ChunkIndex:N0} channels={chunk.ChannelIds.Length:N0} samplesPerChannel={chunk.SamplesPerChannel:N0} payloadBytes={chunk.PayloadBytes:N0}");
+            // Successful segment preparation is intentionally not logged per segment.
+            // At 256ch/1MHz and 0.5s segments that log becomes part of the hot path.
         }
 
         private int CalculateChunkSampleLimit(int sourceChannelCount)
