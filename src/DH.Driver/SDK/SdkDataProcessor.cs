@@ -129,11 +129,17 @@ public class SdkDataProcessor : IDisposable
 
     public void SetRealtimePublishEnabled(bool enabled)
     {
+        bool changed = _realtimePublishEnabled != enabled;
         _realtimePublishEnabled = enabled;
         if (!enabled)
         {
             DrainRealtimePreviewQueue();
             ClearBufferedChannels();
+        }
+
+        if (changed)
+        {
+            Console.WriteLine($"[SDK] Realtime publish enabled={enabled}");
         }
     }
 

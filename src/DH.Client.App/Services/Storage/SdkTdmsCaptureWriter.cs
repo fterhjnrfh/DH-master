@@ -21,8 +21,8 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private const long MaxSourcePendingPayloadByteLimit = 384L * 1024 * 1024;
     // Keep source segments small enough that 256ch/1MHz capture does not allocate
     // multi-GB waves of LOH buffers at each segment boundary.
-    private const long StreamAppendChunkPayloadByteLimit = 96L * 1024 * 1024;
-    private const double StreamAppendChunkSeconds = 1d;
+    private const long StreamAppendChunkPayloadByteLimit = 48L * 1024 * 1024;
+    private const double StreamAppendChunkSeconds = 0.5d;
     private const int TdmsSegmentWriterCount = 2;
     private const double QueueStatusLogSeconds = 10d;
     private const long MaxPendingSegmentLimit = 200;

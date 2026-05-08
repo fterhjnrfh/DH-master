@@ -1686,6 +1686,9 @@ public partial class MainWindowViewModel : ObservableObject
         }
 
         CleanupSdkRawCaptureSubscription();
+        // Disable realtime publishing before creating the high-rate writer so the
+        // SDK callback is dedicated to raw block handoff for the whole capture.
+        SetSdkRealtimePublishEnabled(false);
         _sdkTdmsCaptureWriter?.Dispose();
         _sdkTdmsCaptureWriter = new SdkTdmsCaptureWriter();
         _sdkTdmsCaptureWriter.Start(
@@ -1695,9 +1698,6 @@ public partial class MainWindowViewModel : ObservableObject
             channelIds,
             compressionSettings);
         _sdkRawCaptureProtectionStopPending = false;
-        // Keep the SDK callback focused on raw block handoff during high-rate TDMS capture.
-        // Realtime preview is restored when capture stops.
-        SetSdkRealtimePublishEnabled(false);
 
         _sdkRawBlockHandler = rawBlock =>
         {
