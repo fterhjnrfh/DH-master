@@ -823,17 +823,42 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     {
         string firstFile = writtenFiles.FirstOrDefault() ?? string.Empty;
         var sampleCounts = BuildSampleCounts();
+        var tdmsSegments = GetTdmsSegments().ToList();
+        var sourceSampleCounts = BuildTdmsSourceSampleCounts(tdmsSegments);
+        long minDeviceSamplesPerChannel = sourceSampleCounts.Count > 0
+            ? sourceSampleCounts.Min(source => source.SamplesPerChannel)
+            : 0L;
+        long maxDeviceSamplesPerChannel = sourceSampleCounts.Count > 0
+            ? sourceSampleCounts.Max(source => source.SamplesPerChannel)
+            : 0L;
+        bool deviceSampleCountsBalanced = sourceSampleCounts.Count <= 1
+            || minDeviceSamplesPerChannel == maxDeviceSamplesPerChannel;
+        int deviceIntegrityIssueCount = deviceSampleCountsBalanced
+            ? 0
+            : sourceSampleCounts.Count(source => source.SamplesPerChannel != maxDeviceSamplesPerChannel);
+        double minSampleDerivedDurationSeconds = _sampleRateHz > 0
+            ? minDeviceSamplesPerChannel / _sampleRateHz
+            : 0d;
+        double maxSampleDerivedDurationSeconds = _sampleRateHz > 0
+            ? maxDeviceSamplesPerChannel / _sampleRateHz
+            : 0d;
+        DateTime stoppedAtUtc = _stoppedAtUtc == default ? DateTime.UtcNow : _stoppedAtUtc;
+        double wallClockDurationSeconds = Math.Max(0d, (stoppedAtUtc - _startedAtUtc).TotalSeconds);
+        bool runtimeHealthy = !ProtectionTriggered
+            && _writerFault == null
+            && Interlocked.Read(ref _writeFaultCount) == 0
+            && Interlocked.Read(ref _rejectedBlockCount) == 0;
 
         var manifest = new SdkRawCaptureManifest
         {
             SessionName = _sessionName,
             CaptureFileName = string.IsNullOrWhiteSpace(firstFile) ? string.Empty : Path.GetFileName(firstFile),
             StartedAtUtc = _startedAtUtc,
-            StoppedAtUtc = _stoppedAtUtc == default ? DateTime.UtcNow : _stoppedAtUtc,
+            StoppedAtUtc = stoppedAtUtc,
             SampleRateHz = _sampleRateHz,
             ExpectedChannelCount = _expectedChannelIds.Count,
             ObservedChannelCount = _channelSampleCounts.Count,
-            ObservedDeviceCount = _sourceWriters.Count,
+            ObservedDeviceCount = sourceSampleCounts.Count,
             BlockCount = Interlocked.Read(ref _writtenBlockCount),
             TotalSamples = Interlocked.Read(ref _totalSamples),
             RawPayloadBytes = Interlocked.Read(ref _totalSamples) * sizeof(float),
@@ -850,13 +875,104 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             ProtectionTriggered = ProtectionTriggered,
             ProtectionReason = _protectionReason,
             LastError = _writerFault?.Message ?? _protectionReason,
-            DataIntegrityPassed = !ProtectionTriggered && _writerFault == null && Interlocked.Read(ref _writeFaultCount) == 0,
-            IntegritySummary = "SDK blocks were deinterleaved into source-sharded TDMS segment files.",
+            DataIntegrityPassed = runtimeHealthy && deviceSampleCountsBalanced,
+            IntegritySummary = BuildTdmsIntegritySummary(sourceSampleCounts, deviceSampleCountsBalanced),
+            DeviceIntegrityIssueCount = deviceIntegrityIssueCount,
+            DeviceSampleCountsBalanced = deviceSampleCountsBalanced,
+            MinDeviceSamplesPerChannel = minDeviceSamplesPerChannel,
+            MaxDeviceSamplesPerChannel = maxDeviceSamplesPerChannel,
+            WallClockDurationSeconds = wallClockDurationSeconds,
+            MinSampleDerivedDurationSeconds = minSampleDerivedDurationSeconds,
+            MaxSampleDerivedDurationSeconds = maxSampleDerivedDurationSeconds,
+            MinEffectiveSampleRateHz = wallClockDurationSeconds > 0 ? minDeviceSamplesPerChannel / wallClockDurationSeconds : 0d,
+            MaxEffectiveSampleRateHz = wallClockDurationSeconds > 0 ? maxDeviceSamplesPerChannel / wallClockDurationSeconds : 0d,
+            SampleRateConsistencyPassed = deviceSampleCountsBalanced,
+            SampleRateConsistencySummary = BuildTdmsSampleTimingSummary(
+                wallClockDurationSeconds,
+                minSampleDerivedDurationSeconds,
+                maxSampleDerivedDurationSeconds),
+            DeviceIntegrity = sourceSampleCounts
+                .Select(source => new SdkRawCaptureDeviceIntegrity
+                {
+                    DeviceId = source.SourceId,
+                    MachineId = source.SourceId,
+                    ChannelCount = source.ChannelCount,
+                    BlockCount = source.SegmentCount,
+                    SamplesPerChannel = source.SamplesPerChannel,
+                    HasIssues = !deviceSampleCountsBalanced && source.SamplesPerChannel != maxDeviceSamplesPerChannel,
+                    IssueExamples = !deviceSampleCountsBalanced && source.SamplesPerChannel != maxDeviceSamplesPerChannel
+                        ? new List<string> { $"tdms source ended {maxDeviceSamplesPerChannel - source.SamplesPerChannel:N0} samples before longest source" }
+                        : new List<string>()
+                })
+                .ToList(),
             ChannelSampleCounts = new Dictionary<string, long>(sampleCounts, StringComparer.OrdinalIgnoreCase)
         };
-        manifest.TdmsSegments = GetTdmsSegments().ToList();
+        manifest.TdmsSegments = tdmsSegments;
         return manifest;
     }
+
+    private static IReadOnlyList<TdmsSourceSampleCount> BuildTdmsSourceSampleCounts(
+        IReadOnlyCollection<TdmsSegmentManifestEntry> segments)
+        => segments
+            .GroupBy(static segment => segment.SourceId)
+            .OrderBy(static group => group.Key)
+            .Select(static group =>
+            {
+                long samplesPerChannel = group.Max(static segment => segment.EndSampleExclusive);
+                int channelCount = group
+                    .SelectMany(static segment => segment.ChannelIds)
+                    .Distinct()
+                    .Count();
+                return new TdmsSourceSampleCount(
+                    group.Key,
+                    group.Count(),
+                    channelCount,
+                    samplesPerChannel);
+            })
+            .ToArray();
+
+    private static string BuildTdmsIntegritySummary(
+        IReadOnlyList<TdmsSourceSampleCount> sources,
+        bool deviceSampleCountsBalanced)
+    {
+        if (sources.Count == 0)
+        {
+            return "No TDMS source segment data recorded.";
+        }
+
+        if (deviceSampleCountsBalanced)
+        {
+            return "TDMS source segment files were written with balanced source durations.";
+        }
+
+        var minSource = sources
+            .OrderBy(static source => source.SamplesPerChannel)
+            .ThenBy(static source => source.SourceId)
+            .First();
+        var maxSource = sources
+            .OrderByDescending(static source => source.SamplesPerChannel)
+            .ThenBy(static source => source.SourceId)
+            .First();
+        long spread = maxSource.SamplesPerChannel - minSource.SamplesPerChannel;
+        return $"TDMS source duration mismatch AI{minSource.SourceId:00}={minSource.SamplesPerChannel:N0} to AI{maxSource.SourceId:00}={maxSource.SamplesPerChannel:N0} samples/channel, spread={spread:N0}.";
+    }
+
+    private static string BuildTdmsSampleTimingSummary(
+        double wallClockDurationSeconds,
+        double minSampleDerivedDurationSeconds,
+        double maxSampleDerivedDurationSeconds)
+        => $"wallClock={wallClockDurationSeconds:N3}s, sampleDuration={FormatDoubleRange(minSampleDerivedDurationSeconds, maxSampleDerivedDurationSeconds, "N3")}s.";
+
+    private static string FormatDoubleRange(double minValue, double maxValue, string format)
+        => Math.Abs(minValue - maxValue) < 0.000001d
+            ? minValue.ToString(format)
+            : $"{minValue.ToString(format)} ~ {maxValue.ToString(format)}";
+
+    private sealed record TdmsSourceSampleCount(
+        int SourceId,
+        int SegmentCount,
+        int ChannelCount,
+        long SamplesPerChannel);
 
     private IReadOnlyList<TdmsSegmentManifestEntry> GetTdmsSegments()
     {

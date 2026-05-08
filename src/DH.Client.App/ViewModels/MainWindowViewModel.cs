@@ -1695,7 +1695,9 @@ public partial class MainWindowViewModel : ObservableObject
             channelIds,
             compressionSettings);
         _sdkRawCaptureProtectionStopPending = false;
-        SetSdkRealtimePublishEnabled(true);
+        // Keep the SDK callback focused on raw block handoff during high-rate TDMS capture.
+        // Realtime preview is restored when capture stops.
+        SetSdkRealtimePublishEnabled(false);
 
         _sdkRawBlockHandler = rawBlock =>
         {
