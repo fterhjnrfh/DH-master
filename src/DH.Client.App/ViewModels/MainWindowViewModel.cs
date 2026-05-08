@@ -1463,6 +1463,12 @@ public partial class MainWindowViewModel : ObservableObject
         var channelIds = ResolveStorageChannelIds();
         var sessionName = ResolveStorageSessionName();
         var compressionSettings = BuildStorageCompressionSettings(basePath);
+        if (compressionSettings.Enabled)
+        {
+            StorageCompressionConfigStatus =
+                $"{StorageCompressionConfigStatus}; SDK high-rate TDMS writes raw, offline compression required";
+        }
+
         SaveStorageUiPreferences();
 
         await Task.Run(() =>

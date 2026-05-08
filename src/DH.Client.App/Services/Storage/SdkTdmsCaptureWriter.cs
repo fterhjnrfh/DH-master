@@ -104,7 +104,9 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         ResetState();
 
         _sampleRateHz = sampleRateHz;
-        _compressionSettings = CreateCaptureHotPathCompressionSettings(compressionSettings);
+        StorageCompressionSettings requestedCompressionSettings = compressionSettings?.Clone() ?? new StorageCompressionSettings();
+        requestedCompressionSettings.Normalize();
+        _compressionSettings = CreateCaptureHotPathCompressionSettings(requestedCompressionSettings);
         _compressionSettings.Normalize();
         _startedAtUtc = DateTime.UtcNow;
         _sessionFolder = StorageSessionNaming.CreateUniqueSessionFolder(basePath, sessionName, out string safeSessionName);
@@ -154,6 +156,12 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
         _started = true;
         WriteDiagnosticHeader(basePath, expectedChannelIds.Count);
+        if (requestedCompressionSettings.Enabled && !_compressionSettings.Enabled)
+        {
+            LogDiagnostic(
+                $"compression-hot-path-bypassed requested={requestedCompressionSettings.Describe()} effective={_compressionSettings.Describe()} reason=preserve-256ch-1MHz-capture-throughput");
+        }
+
         LogDiagnostic($"writer-started sourceWriters={_sourceWriters.Count:N0} tdmsSegmentWriters={TdmsSegmentWriterCount:N0} previewLevels={(EnableCapturePreviewSidecar ? "L2,L3,L4" : "disabled/offline-build")}");
     }
 
