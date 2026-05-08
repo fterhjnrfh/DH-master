@@ -226,6 +226,7 @@ Console.WriteLine($"RawIndexBytesValidated={artifactValidation.RawIndexBytes}");
 Console.WriteLine($"RawCaptureFileExists={(artifactValidation.RawCaptureFileExists ? 1 : 0)}");
 Console.WriteLine("FastSegmentFiles=" + CountManifestFiles(diagnostics.Artifacts.ManifestPath, ".dhseg"));
 Console.WriteLine("TdmsFiles=" + CountManifestFiles(diagnostics.Artifacts.ManifestPath, ".tdms"));
+WriteTdmsSourceTimingDiagnostics(diagnostics.Artifacts.ManifestPath, sampleRateHz);
 
 if (requireCatalog)
 {
@@ -542,4 +543,218 @@ static int CountManifestFiles(string? manifestPath, string extension)
         .Count(element =>
             element.ValueKind == JsonValueKind.String
             && (element.GetString() ?? string.Empty).EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+}
+
+static void WriteTdmsSourceTimingDiagnostics(string? manifestPath, double fallbackSampleRateHz)
+{
+    TdmsSourceTimingSummary summary = ReadTdmsSourceTimingSummary(manifestPath, fallbackSampleRateHz);
+    if (summary.SourceCount == 0)
+    {
+        Console.WriteLine("TdmsSourceTiming=Unavailable");
+        return;
+    }
+
+    Console.WriteLine("TdmsSourceTiming=Available");
+    Console.WriteLine($"TdmsSourceCount={summary.SourceCount}");
+    Console.WriteLine($"TdmsSourceMinEndSample={summary.MinEndSample}");
+    Console.WriteLine($"TdmsSourceMaxEndSample={summary.MaxEndSample}");
+    Console.WriteLine($"TdmsSourceTailSpreadSamples={summary.TailSpreadSamples}");
+    Console.WriteLine($"TdmsSourceMinDurationSeconds={summary.MinDurationSeconds:F6}");
+    Console.WriteLine($"TdmsSourceMaxDurationSeconds={summary.MaxDurationSeconds:F6}");
+    Console.WriteLine($"TdmsSourceTailSpreadSeconds={summary.TailSpreadSeconds:F6}");
+    Console.WriteLine($"TdmsSourceShortSources={string.Join(",", summary.ShortSourceIds)}");
+    Console.WriteLine($"TdmsSourceLongSources={string.Join(",", summary.LongSourceIds)}");
+
+    if (summary.TailSpreadSamples > 0)
+    {
+        Console.WriteLine($"TdmsSourceTimingDiagnosis={summary.Diagnosis}");
+    }
+
+    foreach (TdmsSourceTiming source in summary.Sources.OrderBy(static source => source.SourceId))
+    {
+        Console.WriteLine(
+            $"TdmsSource:{source.SourceId:D4}:segments={source.SegmentCount},endSample={source.EndSample},durationSeconds={source.DurationSeconds:F6},offsetFromMinSamples={source.OffsetFromMinSamples},lastSegmentSamples={source.LastSegmentSamples}");
+    }
+}
+
+static TdmsSourceTimingSummary ReadTdmsSourceTimingSummary(string? manifestPath, double fallbackSampleRateHz)
+{
+    if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
+    {
+        return TdmsSourceTimingSummary.Empty;
+    }
+
+    using var stream = File.OpenRead(manifestPath);
+    using var document = JsonDocument.Parse(stream);
+    double sampleRateHz = fallbackSampleRateHz;
+    if (document.RootElement.TryGetProperty("SampleRateHz", out JsonElement sampleRateElement)
+        && sampleRateElement.TryGetDouble(out double manifestSampleRate)
+        && manifestSampleRate > 0)
+    {
+        sampleRateHz = manifestSampleRate;
+    }
+
+    if (!document.RootElement.TryGetProperty("TdmsSegments", out JsonElement segments)
+        || segments.ValueKind != JsonValueKind.Array)
+    {
+        return TdmsSourceTimingSummary.Empty;
+    }
+
+    var states = new Dictionary<int, TdmsSourceTimingState>();
+    foreach (JsonElement segment in segments.EnumerateArray())
+    {
+        int sourceId = segment.TryGetProperty("SourceId", out JsonElement sourceElement) && sourceElement.TryGetInt32(out int parsedSourceId)
+            ? parsedSourceId
+            : -1;
+        if (sourceId < 0)
+        {
+            continue;
+        }
+
+        int segmentIndex = segment.TryGetProperty("SegmentIndex", out JsonElement segmentIndexElement) && segmentIndexElement.TryGetInt32(out int parsedSegmentIndex)
+            ? parsedSegmentIndex
+            : 0;
+        long start = segment.TryGetProperty("StartSample", out JsonElement startElement) && startElement.TryGetInt64(out long parsedStart)
+            ? parsedStart
+            : 0L;
+        long samples = segment.TryGetProperty("SamplesPerChannel", out JsonElement samplesElement) && samplesElement.TryGetInt64(out long parsedSamples)
+            ? parsedSamples
+            : 0L;
+        if (samples <= 0)
+        {
+            continue;
+        }
+
+        long end = start + samples;
+        if (!states.TryGetValue(sourceId, out TdmsSourceTimingState? state))
+        {
+            state = new TdmsSourceTimingState(sourceId);
+            states[sourceId] = state;
+        }
+
+        state.SegmentCount++;
+        if (end >= state.EndSample)
+        {
+            state.EndSample = end;
+            state.LastSegmentSamples = samples;
+            state.LastSegmentIndex = segmentIndex;
+        }
+    }
+
+    if (states.Count == 0)
+    {
+        return TdmsSourceTimingSummary.Empty;
+    }
+
+    long minEnd = states.Values.Min(static state => state.EndSample);
+    TdmsSourceTiming[] sources = states
+        .Values
+        .OrderBy(static state => state.SourceId)
+        .Select(state => new TdmsSourceTiming(
+            state.SourceId,
+            state.SegmentCount,
+            state.EndSample,
+            sampleRateHz > 0 ? state.EndSample / sampleRateHz : 0.0,
+            state.EndSample - minEnd,
+            state.LastSegmentSamples,
+            state.LastSegmentIndex))
+        .ToArray();
+
+    long maxEnd = sources.Max(static source => source.EndSample);
+    long spread = maxEnd - minEnd;
+    double minDuration = sampleRateHz > 0 ? minEnd / sampleRateHz : 0.0;
+    double maxDuration = sampleRateHz > 0 ? maxEnd / sampleRateHz : 0.0;
+    int[] shortSources = sources
+        .Where(source => source.EndSample == minEnd)
+        .Select(static source => source.SourceId)
+        .ToArray();
+    int[] longSources = sources
+        .Where(source => source.EndSample == maxEnd)
+        .Select(static source => source.SourceId)
+        .ToArray();
+    string diagnosis = spread == 0
+        ? "Balanced"
+        : BuildTdmsSourceTimingDiagnosis(sources, spread);
+
+    return new TdmsSourceTimingSummary(
+        sources,
+        minEnd,
+        maxEnd,
+        spread,
+        minDuration,
+        maxDuration,
+        sampleRateHz > 0 ? spread / sampleRateHz : 0.0,
+        shortSources,
+        longSources,
+        diagnosis);
+}
+
+static string BuildTdmsSourceTimingDiagnosis(IReadOnlyCollection<TdmsSourceTiming> sources, long spread)
+{
+    long[] distinctOffsets = sources
+        .Select(static source => source.OffsetFromMinSamples)
+        .Distinct()
+        .OrderBy(static offset => offset)
+        .ToArray();
+
+    if (distinctOffsets.Length <= 4)
+    {
+        return "StopBoundarySkewCandidate";
+    }
+
+    return "SourceEndMismatch";
+}
+
+sealed class TdmsSourceTimingState
+{
+    public TdmsSourceTimingState(int sourceId)
+    {
+        SourceId = sourceId;
+    }
+
+    public int SourceId { get; }
+
+    public int SegmentCount { get; set; }
+
+    public long EndSample { get; set; }
+
+    public long LastSegmentSamples { get; set; }
+
+    public int LastSegmentIndex { get; set; }
+}
+
+sealed record TdmsSourceTiming(
+    int SourceId,
+    int SegmentCount,
+    long EndSample,
+    double DurationSeconds,
+    long OffsetFromMinSamples,
+    long LastSegmentSamples,
+    int LastSegmentIndex);
+
+sealed record TdmsSourceTimingSummary(
+    IReadOnlyList<TdmsSourceTiming> Sources,
+    long MinEndSample,
+    long MaxEndSample,
+    long TailSpreadSamples,
+    double MinDurationSeconds,
+    double MaxDurationSeconds,
+    double TailSpreadSeconds,
+    IReadOnlyList<int> ShortSourceIds,
+    IReadOnlyList<int> LongSourceIds,
+    string Diagnosis)
+{
+    public static readonly TdmsSourceTimingSummary Empty = new(
+        Array.Empty<TdmsSourceTiming>(),
+        0L,
+        0L,
+        0L,
+        0.0,
+        0.0,
+        0.0,
+        Array.Empty<int>(),
+        Array.Empty<int>(),
+        "Unavailable");
+
+    public int SourceCount => Sources.Count;
 }
