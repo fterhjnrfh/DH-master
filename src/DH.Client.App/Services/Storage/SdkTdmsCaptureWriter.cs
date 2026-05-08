@@ -259,6 +259,47 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         };
     }
 
+    public (long MinSamplesPerChannel, long MaxSamplesPerChannel, int SourceCount) GetCurrentSourceSampleRange()
+    {
+        IReadOnlyList<TdmsSourceSampleCount> sourceCounts = BuildCurrentSourceSampleCounts();
+        if (sourceCounts.Count == 0)
+        {
+            return (0L, 0L, 0);
+        }
+
+        return (
+            sourceCounts.Min(static source => source.SamplesPerChannel),
+            sourceCounts.Max(static source => source.SamplesPerChannel),
+            sourceCounts.Count);
+    }
+
+    public bool WaitForMinimumSourceSamples(long targetSamplesPerChannel, TimeSpan maxWait)
+    {
+        if (targetSamplesPerChannel <= 0)
+        {
+            return true;
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < maxWait && _started && _writerFault == null && !ProtectionTriggered)
+        {
+            var range = GetCurrentSourceSampleRange();
+            if (range.SourceCount > 0 && range.MinSamplesPerChannel >= targetSamplesPerChannel)
+            {
+                LogDiagnostic(
+                    $"stop-alignment-wait-reached targetSamples={targetSamplesPerChannel:N0} minSamples={range.MinSamplesPerChannel:N0} maxSamples={range.MaxSamplesPerChannel:N0} sourceCount={range.SourceCount:N0} elapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3}");
+                return true;
+            }
+
+            Thread.Sleep(25);
+        }
+
+        var finalRange = GetCurrentSourceSampleRange();
+        LogDiagnostic(
+            $"stop-alignment-wait-finished targetSamples={targetSamplesPerChannel:N0} reached={finalRange.MinSamplesPerChannel >= targetSamplesPerChannel} minSamples={finalRange.MinSamplesPerChannel:N0} maxSamples={finalRange.MaxSamplesPerChannel:N0} sourceCount={finalRange.SourceCount:N0} elapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3}");
+        return finalRange.MinSamplesPerChannel >= targetSamplesPerChannel;
+    }
+
     public SdkRawCaptureResult Complete()
     {
         if (!_started)
@@ -951,6 +992,41 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                     samplesPerChannel);
             })
             .ToArray();
+
+    private IReadOnlyList<TdmsSourceSampleCount> BuildCurrentSourceSampleCounts()
+    {
+        KeyValuePair<int, long>[] snapshot = _channelSampleCounts.ToArray();
+        if (_expectedChannelIds.Count > 0)
+        {
+            return _expectedChannelIds
+                .GroupBy(ChannelNaming.GetDeviceId)
+                .OrderBy(static group => group.Key)
+                .Select(group =>
+                {
+                    int[] channelIds = group.ToArray();
+                    long samplesPerChannel = channelIds
+                        .Select(channelId => snapshot.FirstOrDefault(item => item.Key == channelId).Value)
+                        .DefaultIfEmpty(0L)
+                        .Min();
+                    return new TdmsSourceSampleCount(
+                        group.Key,
+                        0,
+                        channelIds.Length,
+                        samplesPerChannel);
+                })
+                .ToArray();
+        }
+
+        return snapshot
+            .GroupBy(static item => ChannelNaming.GetDeviceId(item.Key))
+            .OrderBy(static group => group.Key)
+            .Select(static group => new TdmsSourceSampleCount(
+                group.Key,
+                0,
+                group.Count(),
+                group.Min(static item => item.Value)))
+            .ToArray();
+    }
 
     private static string BuildTdmsIntegritySummary(
         IReadOnlyList<TdmsSourceSampleCount> sources,

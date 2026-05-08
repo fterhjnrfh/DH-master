@@ -1802,11 +1802,8 @@ public partial class MainWindowViewModel : ObservableObject
         }
 
         _sdkTdmsCaptureStopInProgress = true;
-        CleanupSdkRawCaptureSubscription();
         var writer = _sdkTdmsCaptureWriter;
-        _sdkTdmsCaptureWriter = null;
-        _activeStorageRuntime = null;
-        StorageStatusMessage = "正在停止高速段写入，后台封存文件和生成清单...";
+        StorageStatusMessage = "正在对齐停止高速段写入，等待最短设备追上录制时长...";
         (StartStorageCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
         (StopStorageCommand as RelayCommand)?.NotifyCanExecuteChanged();
 
@@ -1814,11 +1811,22 @@ public partial class MainWindowViewModel : ObservableObject
         {
             try
             {
+                if (writer != null)
+                {
+                    long targetSamples = SampleRate > 0
+                        ? Math.Max(0L, (long)Math.Ceiling(finalElapsed.TotalSeconds * SampleRate))
+                        : 0L;
+                    writer.WaitForMinimumSourceSamples(targetSamples, TimeSpan.FromSeconds(2));
+                }
+
+                CleanupSdkRawCaptureSubscription();
                 return writer?.Complete();
             }
             finally
             {
                 writer?.Dispose();
+                _sdkTdmsCaptureWriter = null;
+                _activeStorageRuntime = null;
             }
         }).ContinueWith(task =>
         {
