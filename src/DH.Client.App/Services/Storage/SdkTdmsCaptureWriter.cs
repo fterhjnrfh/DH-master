@@ -1305,8 +1305,11 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                         continue;
                     }
 
-                    int chunkSelectedChannelCount = 0;
                     var deinterleaveStopwatch = Stopwatch.StartNew();
+                    int[] targetChannelIds = new int[chunk.ChannelIds.Length];
+                    int[] sourceOffsets = new int[chunk.ChannelIds.Length];
+                    float[][] targets = new float[chunk.ChannelIds.Length][];
+                    int chunkSelectedChannelCount = 0;
                     foreach (int channelId in chunk.ChannelIds)
                     {
                         int channelOffset = ChannelNaming.GetChannelNumber(channelId) - 1;
@@ -1315,15 +1318,26 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                             continue;
                         }
 
-                        float[] target = chunk.GetBuffer(channelId);
-                        int targetOffset = chunk.SamplesPerChannel;
-                        for (int sampleIndex = 0; sampleIndex < copyCount; sampleIndex++)
-                        {
-                            target[targetOffset + sampleIndex] = payload[(consumed + sampleIndex) * channelCount + channelOffset];
-                        }
-
+                        targetChannelIds[chunkSelectedChannelCount] = channelId;
+                        sourceOffsets[chunkSelectedChannelCount] = channelOffset;
+                        targets[chunkSelectedChannelCount] = chunk.GetBuffer(channelId);
                         chunkSelectedChannelCount++;
-                        _owner.OnSourceChannelSamples(channelId, copyCount);
+                    }
+
+                    int targetOffset = chunk.SamplesPerChannel;
+                    for (int sampleIndex = 0; sampleIndex < copyCount; sampleIndex++)
+                    {
+                        int sourceBase = (consumed + sampleIndex) * channelCount;
+                        int targetIndex = targetOffset + sampleIndex;
+                        for (int targetBufferIndex = 0; targetBufferIndex < chunkSelectedChannelCount; targetBufferIndex++)
+                        {
+                            targets[targetBufferIndex][targetIndex] = payload[sourceBase + sourceOffsets[targetBufferIndex]];
+                        }
+                    }
+
+                    for (int targetBufferIndex = 0; targetBufferIndex < chunkSelectedChannelCount; targetBufferIndex++)
+                    {
+                        _owner.OnSourceChannelSamples(targetChannelIds[targetBufferIndex], copyCount);
                     }
 
                     deinterleaveStopwatch.Stop();
