@@ -102,7 +102,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         ResetState();
 
         _sampleRateHz = sampleRateHz;
-        _compressionSettings = compressionSettings?.Clone() ?? new StorageCompressionSettings();
+        _compressionSettings = CreateCaptureHotPathCompressionSettings(compressionSettings);
         _compressionSettings.Normalize();
         _startedAtUtc = DateTime.UtcNow;
         _sessionFolder = StorageSessionNaming.CreateUniqueSessionFolder(basePath, sessionName, out string safeSessionName);
@@ -153,6 +153,25 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         _started = true;
         WriteDiagnosticHeader(basePath, expectedChannelIds.Count);
         LogDiagnostic($"writer-started sourceWriters={_sourceWriters.Count:N0} tdmsSegmentWriters={TdmsSegmentWriterCount:N0} previewLevels={(EnableCapturePreviewSidecar ? "L2,L3,L4" : "disabled/offline-build")}");
+    }
+
+    private static StorageCompressionSettings CreateCaptureHotPathCompressionSettings(
+        StorageCompressionSettings? requestedSettings)
+    {
+        StorageCompressionSettings settings = requestedSettings?.Clone() ?? new StorageCompressionSettings();
+        settings.Normalize();
+        if (!settings.Enabled)
+        {
+            return settings;
+        }
+
+        return new StorageCompressionSettings
+        {
+            Enabled = false,
+            Algorithm = CompressionType.None,
+            Preprocess = PreprocessType.None,
+            Options = settings.Options.Clone()
+        };
     }
 
     public bool TryEnqueue(SdkRawBlock rawBlock)

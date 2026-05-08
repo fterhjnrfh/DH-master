@@ -45,10 +45,14 @@ public sealed class ManualTdmsSourceSegmentFileWriter
         compressionSettings.Normalize();
         bool compressionEnabled = compressionSettings.Enabled
             && (compressionSettings.Algorithm != CompressionType.None || compressionSettings.Preprocess != PreprocessType.None);
-        ChannelPayload[] payloads = BuildChannelPayloads(request, channelIds, compressionSettings, compressionEnabled);
+        ChannelPayload[] payloads = compressionEnabled
+            ? BuildCompressedChannelPayloads(request, channelIds, compressionSettings)
+            : Array.Empty<ChannelPayload>();
         byte[] metadata = BuildMetadata(request, channelIds, payloads, compressionEnabled);
         long payloadBytes = checked((long)channelIds.Length * request.SamplesPerChannel * sizeof(float));
-        long codecPayloadBytes = payloads.Sum(static payload => (long)payload.Payload.Length);
+        long codecPayloadBytes = compressionEnabled
+            ? payloads.Sum(static payload => (long)payload.Payload.Length)
+            : payloadBytes;
         ulong rawDataOffset = (ulong)metadata.Length;
         ulong nextSegmentOffset = checked((ulong)metadata.Length + (ulong)codecPayloadBytes);
 
@@ -64,9 +68,26 @@ public sealed class ManualTdmsSourceSegmentFileWriter
             writer.Write(rawDataOffset);
             writer.Write(metadata);
 
-            foreach (ChannelPayload payload in payloads)
+            if (compressionEnabled)
             {
-                stream.Write(payload.Payload, 0, payload.Payload.Length);
+                foreach (ChannelPayload payload in payloads)
+                {
+                    stream.Write(payload.Payload, 0, payload.Payload.Length);
+                }
+            }
+            else
+            {
+                foreach (int channelId in channelIds)
+                {
+                    float[] samples = request.GetSamples(channelId);
+                    if (samples.Length < request.SamplesPerChannel)
+                    {
+                        throw new InvalidDataException($"Channel {channelId} only has {samples.Length} samples, expected at least {request.SamplesPerChannel}.");
+                    }
+
+                    ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(samples.AsSpan(0, request.SamplesPerChannel));
+                    stream.Write(bytes);
+                }
             }
         }
 
@@ -94,11 +115,10 @@ public sealed class ManualTdmsSourceSegmentFileWriter
         };
     }
 
-    private static ChannelPayload[] BuildChannelPayloads(
+    private static ChannelPayload[] BuildCompressedChannelPayloads(
         TdmsSourceSegmentWriteRequest request,
         int[] channelIds,
-        StorageCompressionSettings compressionSettings,
-        bool compressionEnabled)
+        StorageCompressionSettings compressionSettings)
     {
         var payloads = new List<ChannelPayload>(channelIds.Length);
         foreach (int channelId in channelIds)
@@ -107,14 +127,6 @@ public sealed class ManualTdmsSourceSegmentFileWriter
             if (samples.Length < request.SamplesPerChannel)
             {
                 throw new InvalidDataException($"Channel {channelId} only has {samples.Length} samples, expected at least {request.SamplesPerChannel}.");
-            }
-
-            if (!compressionEnabled)
-            {
-                ReadOnlySpan<byte> bytes = MemoryMarshal.AsBytes(samples.AsSpan(0, request.SamplesPerChannel));
-                byte[] payload = bytes.ToArray();
-                payloads.Add(new ChannelPayload(channelId, payload, CompressionType.None, PreprocessType.None));
-                continue;
             }
 
             FloatSampleCompressionResult encoded = FloatSampleCompressionCodec.Encode(
@@ -141,12 +153,14 @@ public sealed class ManualTdmsSourceSegmentFileWriter
 
         foreach (int channelId in channelIds)
         {
-            ChannelPayload payload = payloads.First(item => item.ChannelId == channelId);
+            ChannelPayload? payload = compressionEnabled
+                ? payloads.First(item => item.ChannelId == channelId)
+                : null;
             WriteString(writer, $"/'source_{request.SourceId:D4}'/'AI{channelId:D4}'");
             writer.Write(RawDataIndexLength);
             writer.Write(compressionEnabled ? TdsTypeUnsignedByte : TdsTypeSingleFloat);
             writer.Write(1u);
-            writer.Write((ulong)(compressionEnabled ? payload.Payload.Length : request.SamplesPerChannel));
+            writer.Write((ulong)(compressionEnabled ? payload!.Payload.Length : request.SamplesPerChannel));
             writer.Write((uint)(compressionEnabled ? 9 : 3));
             WriteStringProperty(writer, "unit_string", "V");
             WriteDoubleProperty(writer, "wf_increment", 1.0 / request.SampleRateHz);
@@ -154,7 +168,7 @@ public sealed class ManualTdmsSourceSegmentFileWriter
             if (compressionEnabled)
             {
                 WriteStringProperty(writer, "dh_storage_format", "tdms-source-segment-compressed-v1");
-                WriteStringProperty(writer, "dh_compression_algorithm", payload.Algorithm.ToString());
+                WriteStringProperty(writer, "dh_compression_algorithm", payload!.Algorithm.ToString());
                 WriteStringProperty(writer, "dh_preprocess", payload.Preprocess.ToString());
                 WriteIntProperty(writer, "dh_original_sample_count", request.SamplesPerChannel);
                 WriteIntProperty(writer, "dh_original_byte_count", checked(request.SamplesPerChannel * sizeof(float)));
