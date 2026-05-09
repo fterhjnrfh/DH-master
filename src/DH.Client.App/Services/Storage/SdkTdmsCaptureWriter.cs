@@ -24,6 +24,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private const long StreamAppendChunkPayloadByteLimit = 48L * 1024 * 1024;
     private const double StreamAppendChunkSeconds = 0.5d;
     private const int TdmsSegmentWriterCount = 2;
+    private const int BackgroundCompressionWorkerCount = 1;
     private const double QueueStatusLogSeconds = 10d;
     private const long MaxPendingSegmentLimit = 200;
     private const long MaxPendingSegmentPayloadByteLimit = 64L * 1024 * 1024 * 1024;
@@ -32,11 +33,15 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
     private readonly ConcurrentDictionary<int, SourceTdmsWriter> _sourceWriters = new();
     private Channel<PendingTdmsSegment> _segmentWriteQueue = CreateSegmentWriteQueue();
+    private Channel<BackgroundTdmsSegmentCompressionJob> _backgroundCompressionQueue = CreateBackgroundCompressionQueue();
     private readonly List<Task> _segmentWriterTasks = new();
+    private readonly List<Task> _backgroundCompressionTasks = new();
     private readonly ConcurrentDictionary<int, long> _channelSampleCounts = new();
     private readonly List<string> _writtenFiles = new();
+    private readonly List<string> _compressedFiles = new();
     private readonly List<string> _previewFiles = new();
     private readonly List<TdmsSegmentManifestEntry> _tdmsSegments = new();
+    private readonly List<TdmsSegmentManifestEntry> _compressedTdmsSegments = new();
     private readonly HashSet<int> _expectedChannelIds = new();
     private readonly object _diagnosticLogLock = new();
     private readonly object _metricsLock = new();
@@ -46,6 +51,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private string _sessionName = "session";
     private string? _sessionFolder;
     private string? _rawFolder;
+    private string? _compressedFolder;
     private string? _artifactRootPath;
     private string? _diagnosticLogPath;
     private string? _performanceDiagnosticLogPath;
@@ -72,6 +78,16 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private long _previewWriteTicks;
     private long _previewSegmentCount;
     private long _previewPayloadBytes;
+    private long _backgroundCompressionSegmentCount;
+    private long _backgroundCompressionFaultCount;
+    private long _backgroundCompressionPayloadBytes;
+    private long _backgroundCompressionFileBytes;
+    private long _backgroundCompressionTicks;
+    private long _backgroundCompressionReadTicks;
+    private long _pendingBackgroundCompressionCount;
+    private long _pendingBackgroundCompressionPayloadBytes;
+    private long _peakPendingBackgroundCompressionCount;
+    private long _peakPendingBackgroundCompressionPayloadBytes;
     private long _tdmsFullSegmentCount;
     private long _tdmsPartialSegmentCount;
     private long _pendingSegmentCount;
@@ -85,9 +101,17 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private int _protectionTriggered;
     private string _protectionReason = "";
     private Exception? _writerFault;
+    private Exception? _backgroundCompressionFault;
+    private StorageCompressionSettings _requestedCompressionSettings = new();
+    private StorageCompressionSettings _backgroundCompressionSettings = new();
     private StorageCompressionSettings _compressionSettings = new();
 
     public bool ProtectionTriggered => Volatile.Read(ref _protectionTriggered) != 0;
+
+    private bool ShouldRunBackgroundCompression
+        => _backgroundCompressionSettings.Enabled
+           && (_backgroundCompressionSettings.Algorithm != CompressionType.None
+               || _backgroundCompressionSettings.Preprocess != PreprocessType.None);
 
     public void Start(
         string basePath,
@@ -104,16 +128,24 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         ResetState();
 
         _sampleRateHz = sampleRateHz;
-        StorageCompressionSettings requestedCompressionSettings = compressionSettings?.Clone() ?? new StorageCompressionSettings();
-        requestedCompressionSettings.Normalize();
-        _compressionSettings = CreateCaptureHotPathCompressionSettings(requestedCompressionSettings);
+        _requestedCompressionSettings = compressionSettings?.Clone() ?? new StorageCompressionSettings();
+        _requestedCompressionSettings.Normalize();
+        _backgroundCompressionSettings = _requestedCompressionSettings.Clone();
+        _backgroundCompressionSettings.Normalize();
+        _compressionSettings = CreateCaptureHotPathCompressionSettings(_requestedCompressionSettings);
         _compressionSettings.Normalize();
         _startedAtUtc = DateTime.UtcNow;
         _sessionFolder = StorageSessionNaming.CreateUniqueSessionFolder(basePath, sessionName, out string safeSessionName);
         _sessionName = safeSessionName;
         _rawFolder = Path.Combine(_sessionFolder, "raw");
+        _compressedFolder = Path.Combine(_sessionFolder, "compressed");
         _artifactRootPath = Path.Combine(_sessionFolder, $"{_sessionName}.artifacts");
         Directory.CreateDirectory(_rawFolder);
+        if (ShouldRunBackgroundCompression)
+        {
+            Directory.CreateDirectory(_compressedFolder);
+        }
+
         Directory.CreateDirectory(_artifactRootPath);
         _diagnosticLogPath = Path.Combine(_sessionFolder, "tdms-capture-writer.log");
         _performanceDiagnosticLogPath = PerformanceOutputPaths.GetStoragePath("tdms-capture-writer.log");
@@ -138,6 +170,21 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             _segmentWriterTasks.Add(Task.Run(() => ProcessSegmentQueueAsync(workerId)));
         }
 
+        if (ShouldRunBackgroundCompression)
+        {
+            for (int i = 0; i < BackgroundCompressionWorkerCount; i++)
+            {
+                int workerId = i + 1;
+                _backgroundCompressionTasks.Add(Task.Run(() => ProcessBackgroundCompressionQueueAsync(workerId)));
+            }
+
+            StorageCompressionSettings.WriteSnapshot(
+                Path.Combine(_artifactRootPath, "storage.background-compression.json"),
+                _backgroundCompressionSettings);
+            LogDiagnostic(
+                $"background-compression-started workers={BackgroundCompressionWorkerCount:N0} requested={_backgroundCompressionSettings.Describe()} folder={_compressedFolder}");
+        }
+
         if (EnableCapturePreviewSidecar)
         {
             _previewWriter = new PreviewSidecarWriter(
@@ -156,10 +203,10 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
         _started = true;
         WriteDiagnosticHeader(basePath, expectedChannelIds.Count);
-        if (requestedCompressionSettings.Enabled && !_compressionSettings.Enabled)
+        if (_requestedCompressionSettings.Enabled && !_compressionSettings.Enabled)
         {
             LogDiagnostic(
-                $"compression-hot-path-bypassed requested={requestedCompressionSettings.Describe()} effective={_compressionSettings.Describe()} reason=preserve-256ch-1MHz-capture-throughput");
+                $"compression-hot-path-bypassed requested={_requestedCompressionSettings.Describe()} effective={_compressionSettings.Describe()} backgroundRealtime={ShouldRunBackgroundCompression} reason=preserve-256ch-1MHz-capture-throughput");
         }
 
         LogDiagnostic($"writer-started sourceWriters={_sourceWriters.Count:N0} tdmsSegmentWriters={TdmsSegmentWriterCount:N0} previewLevels={(EnableCapturePreviewSidecar ? "L2,L3,L4" : "disabled/offline-build")}");
@@ -319,6 +366,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
         TimeSpan sourceWriterDrainElapsed = TimeSpan.Zero;
         TimeSpan segmentWriterDrainElapsed = TimeSpan.Zero;
+        TimeSpan backgroundCompressionDrainElapsed = TimeSpan.Zero;
         var waitStopwatch = Stopwatch.StartNew();
         try
         {
@@ -366,6 +414,36 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                 waitStopwatch.Stop();
                 segmentWriterDrainElapsed = waitStopwatch.Elapsed;
                 LogDiagnostic($"complete-segment-writers-finished elapsedMs={waitStopwatch.Elapsed.TotalMilliseconds:F3} {BuildThroughputSummary()} pendingSegments={Interlocked.Read(ref _pendingSegmentCount):N0} pendingSegmentBytes={Interlocked.Read(ref _pendingSegmentPayloadBytes):N0}");
+                if (_stoppedAtUtc == default)
+                {
+                    _stoppedAtUtc = DateTime.UtcNow;
+                }
+
+                waitStopwatch.Restart();
+                try
+                {
+                    _backgroundCompressionQueue.Writer.TryComplete();
+                    try
+                    {
+                        Task.WaitAll(_backgroundCompressionTasks.ToArray());
+                    }
+                    catch (Exception ex)
+                    {
+                        _backgroundCompressionFault ??= ex;
+                        Interlocked.Increment(ref _backgroundCompressionFaultCount);
+                        LogDiagnostic($"complete-background-compression-fault error={ex}");
+                    }
+
+                    waitStopwatch.Stop();
+                    backgroundCompressionDrainElapsed = waitStopwatch.Elapsed;
+                    LogDiagnostic(
+                        $"complete-background-compression-finished elapsedMs={waitStopwatch.Elapsed.TotalMilliseconds:F3} compressedSegments={Interlocked.Read(ref _backgroundCompressionSegmentCount):N0} compressionFaults={Interlocked.Read(ref _backgroundCompressionFaultCount):N0} pendingCompression={Interlocked.Read(ref _pendingBackgroundCompressionCount):N0} pendingCompressionBytes={Interlocked.Read(ref _pendingBackgroundCompressionPayloadBytes):N0} compressedFiles={GetCompressedFiles().Count:N0}");
+                }
+                finally
+                {
+                    waitStopwatch.Restart();
+                }
+
                 IReadOnlyList<string> completedPreviewFiles = CompletePreviewWriter();
                 lock (_resultLock)
                 {
@@ -377,18 +455,23 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             {
                 _previewWriter = null;
             }
-            _stoppedAtUtc = DateTime.UtcNow;
-            LogCaptureSummary(sourceWriterDrainElapsed, segmentWriterDrainElapsed);
+            if (_stoppedAtUtc == default)
+            {
+                _stoppedAtUtc = DateTime.UtcNow;
+            }
+
+            LogCaptureSummary(sourceWriterDrainElapsed, segmentWriterDrainElapsed, backgroundCompressionDrainElapsed);
             _started = false;
         }
 
         IReadOnlyList<string> writtenFiles = GetWrittenFiles();
+        IReadOnlyList<string> compressedFiles = GetCompressedFiles();
         IReadOnlyList<string> previewFiles = GetPreviewFiles();
         IReadOnlyDictionary<string, long> sampleCounts = BuildSampleCounts();
 
         try
         {
-            WriteSessionManifest(writtenFiles, previewFiles);
+            WriteSessionManifest(writtenFiles, previewFiles, compressedFiles);
         }
         catch (Exception ex)
         {
@@ -396,7 +479,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         }
 
         var manifest = BuildManifest(writtenFiles);
-        LogDiagnostic($"complete-finished integrity={manifest.DataIntegrityPassed} protection={manifest.ProtectionTriggered} rejected={manifest.RejectedBlockCount:N0} faults={manifest.WriteFaultCount:N0} captureBytes={manifest.CaptureFileBytes:N0} files={writtenFiles.Count:N0}");
+        LogDiagnostic($"complete-finished integrity={manifest.DataIntegrityPassed} protection={manifest.ProtectionTriggered} rejected={manifest.RejectedBlockCount:N0} faults={manifest.WriteFaultCount:N0} captureBytes={manifest.CaptureFileBytes:N0} files={writtenFiles.Count:N0} compressedFiles={compressedFiles.Count:N0}");
         return new SdkRawCaptureResult
         {
             WrittenFiles = writtenFiles,
@@ -456,11 +539,13 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         }
 
         _segmentWriteQueue.Writer.TryComplete();
+        _backgroundCompressionQueue.Writer.TryComplete();
         _previewWriter?.Dispose();
         _previewWriter = null;
         try
         {
             Task.WaitAll(_segmentWriterTasks.ToArray(), TimeSpan.FromSeconds(5));
+            Task.WaitAll(_backgroundCompressionTasks.ToArray(), TimeSpan.FromSeconds(5));
         }
         catch
         {
@@ -468,6 +553,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
         _sourceWriters.Clear();
         _segmentWriterTasks.Clear();
+        _backgroundCompressionTasks.Clear();
     }
 
     private SourceTdmsWriter? GetSourceWriterForBlock(int sourceId, int channelCount)
@@ -517,6 +603,15 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             new UnboundedChannelOptions
             {
                 SingleReader = TdmsSegmentWriterCount == 1,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false
+            });
+
+    private static Channel<BackgroundTdmsSegmentCompressionJob> CreateBackgroundCompressionQueue()
+        => Channel.CreateUnbounded<BackgroundTdmsSegmentCompressionJob>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = BackgroundCompressionWorkerCount == 1,
                 SingleWriter = false,
                 AllowSynchronousContinuations = false
             });
@@ -641,6 +736,8 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                 _tdmsSegments.Add(segment.ToManifestEntry(result));
             }
 
+            TryEnqueueBackgroundCompression(segment);
+
             if (count <= 20 || count % 20 == 0 || result.TotalElapsed.TotalMilliseconds >= 1000)
             {
                 LogDiagnostic(
@@ -651,6 +748,133 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         finally
         {
             segment.Dispose();
+        }
+    }
+
+    private void TryEnqueueBackgroundCompression(PendingTdmsSegment segment)
+    {
+        if (!ShouldRunBackgroundCompression
+            || string.IsNullOrWhiteSpace(_compressedFolder)
+            || !File.Exists(segment.FilePath))
+        {
+            return;
+        }
+
+        string compressedPath = Path.Combine(
+            _compressedFolder,
+            $"source_{segment.SourceId:D4}_seg{segment.SegmentIndex:D6}.tdms");
+        var job = new BackgroundTdmsSegmentCompressionJob
+        {
+            RawFilePath = segment.FilePath,
+            CompressedFilePath = compressedPath,
+            SourceId = segment.SourceId,
+            SegmentIndex = segment.SegmentIndex,
+            StartSample = segment.StartSample,
+            SampleRateHz = segment.SampleRateHz,
+            ChannelIds = segment.ChannelIds,
+            SamplesPerChannel = segment.SamplesPerChannel,
+            PayloadBytes = segment.PayloadBytes,
+            IsPartial = segment.IsPartial
+        };
+
+        if (!_backgroundCompressionQueue.Writer.TryWrite(job))
+        {
+            Interlocked.Increment(ref _backgroundCompressionFaultCount);
+            LogDiagnostic(
+                $"background-compression-enqueue-failed source={segment.SourceId} segment={segment.SegmentIndex:N0} path={compressedPath}");
+            return;
+        }
+
+        long pendingCount = Interlocked.Increment(ref _pendingBackgroundCompressionCount);
+        long pendingBytes = Interlocked.Add(ref _pendingBackgroundCompressionPayloadBytes, segment.PayloadBytes);
+        UpdatePeak(ref _peakPendingBackgroundCompressionCount, pendingCount);
+        UpdatePeak(ref _peakPendingBackgroundCompressionPayloadBytes, pendingBytes);
+
+        if (pendingCount <= 10 || pendingCount % 20 == 0)
+        {
+            LogDiagnostic(
+                $"background-compression-enqueued source={segment.SourceId} segment={segment.SegmentIndex:N0} payloadBytes={segment.PayloadBytes:N0} pendingCompression={pendingCount:N0} pendingCompressionBytes={pendingBytes:N0}");
+        }
+    }
+
+    private async Task ProcessBackgroundCompressionQueueAsync(int workerId)
+    {
+        var reader = _backgroundCompressionQueue.Reader;
+        var compressor = new BackgroundTdmsSegmentCompressor();
+        try
+        {
+            while (await reader.WaitToReadAsync().ConfigureAwait(false))
+            {
+                while (reader.TryRead(out var job))
+                {
+                    Interlocked.Decrement(ref _pendingBackgroundCompressionCount);
+                    Interlocked.Add(ref _pendingBackgroundCompressionPayloadBytes, -job.PayloadBytes);
+                    try
+                    {
+                        CompressSegment(workerId, compressor, job);
+                    }
+                    catch (Exception ex)
+                    {
+                        _backgroundCompressionFault ??= ex;
+                        Interlocked.Increment(ref _backgroundCompressionFaultCount);
+                        LogDiagnostic(
+                            $"background-compression-failed worker={workerId:N0} source={job.SourceId} segment={job.SegmentIndex:N0} raw={job.RawFilePath} error={ex}");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _backgroundCompressionFault ??= ex;
+            Interlocked.Increment(ref _backgroundCompressionFaultCount);
+            LogDiagnostic($"background-compression-loop-failed worker={workerId:N0} error={ex}");
+        }
+    }
+
+    private void CompressSegment(
+        int workerId,
+        BackgroundTdmsSegmentCompressor compressor,
+        BackgroundTdmsSegmentCompressionJob job)
+    {
+        BackgroundTdmsSegmentCompressionResult compressionResult = compressor.Compress(
+            job,
+            _backgroundCompressionSettings);
+        TdmsSourceSegmentWriteResult result = compressionResult.WriteResult;
+        long count = Interlocked.Increment(ref _backgroundCompressionSegmentCount);
+        Interlocked.Add(ref _backgroundCompressionPayloadBytes, result.CodecPayloadBytes);
+        Interlocked.Add(ref _backgroundCompressionFileBytes, result.FileBytes);
+        Interlocked.Add(ref _backgroundCompressionTicks, compressionResult.TotalElapsed.Ticks);
+        Interlocked.Add(ref _backgroundCompressionReadTicks, compressionResult.ReadElapsed.Ticks);
+
+        lock (_resultLock)
+        {
+            if (File.Exists(result.FilePath))
+            {
+                _compressedFiles.Add(result.FilePath);
+            }
+
+            _compressedTdmsSegments.Add(new TdmsSegmentManifestEntry
+            {
+                Path = result.FilePath,
+                SourceId = result.SourceId,
+                SegmentIndex = result.SegmentIndex,
+                StartSample = compressionResult.StartSample,
+                SamplesPerChannel = result.SamplesPerChannel,
+                SampleRateHz = compressionResult.SampleRateHz,
+                ChannelIds = compressionResult.ChannelIds,
+                CompressionEnabled = result.CompressionEnabled,
+                CompressionType = result.CompressionType.ToString(),
+                PreprocessType = result.PreprocessType.ToString(),
+                CompressionOriginalPayloadBytes = result.PayloadBytes,
+                CompressionPayloadBytes = result.CodecPayloadBytes,
+                ChannelPayloadBytes = result.ChannelPayloadBytes
+            });
+        }
+
+        if (count <= 20 || count % 20 == 0 || compressionResult.TotalElapsed.TotalMilliseconds >= 1000)
+        {
+            LogDiagnostic(
+                $"background-compression-written worker={workerId:N0} source={result.SourceId} segment={result.SegmentIndex:N0} channels={result.ChannelCount:N0} samplesPerChannel={result.SamplesPerChannel:N0} rawPayloadBytes={result.PayloadBytes:N0} compressedPayloadBytes={result.CodecPayloadBytes:N0} fileBytes={result.FileBytes:N0} compression={result.CompressionType}/{result.PreprocessType} totalMs={compressionResult.TotalElapsed.TotalMilliseconds:F3} readMs={compressionResult.ReadElapsed.TotalMilliseconds:F3} writeMs={result.TotalElapsed.TotalMilliseconds:F3} pendingCompression={Interlocked.Read(ref _pendingBackgroundCompressionCount):N0} pendingCompressionBytes={Interlocked.Read(ref _pendingBackgroundCompressionPayloadBytes):N0}");
         }
     }
 
@@ -775,7 +999,10 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         TriggerProtection($"TDMS source writer failed, source={sourceId}: {ex.Message}");
     }
 
-    private void LogCaptureSummary(TimeSpan sourceWriterDrainElapsed, TimeSpan segmentWriterDrainElapsed)
+    private void LogCaptureSummary(
+        TimeSpan sourceWriterDrainElapsed,
+        TimeSpan segmentWriterDrainElapsed,
+        TimeSpan backgroundCompressionDrainElapsed)
     {
         long payloadBytes = Interlocked.Read(ref _tdmsSegmentPayloadBytes);
         long fileBytes = Interlocked.Read(ref _tdmsSegmentFileBytes);
@@ -786,14 +1013,22 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         long previewTicks = Interlocked.Read(ref _previewWriteTicks);
         long previewSegmentCount = Interlocked.Read(ref _previewSegmentCount);
         long previewPayloadBytes = Interlocked.Read(ref _previewPayloadBytes);
+        long compressionTicks = Interlocked.Read(ref _backgroundCompressionTicks);
+        long compressionReadTicks = Interlocked.Read(ref _backgroundCompressionReadTicks);
+        long compressionSegmentCount = Interlocked.Read(ref _backgroundCompressionSegmentCount);
+        long compressionPayloadBytes = Interlocked.Read(ref _backgroundCompressionPayloadBytes);
+        long compressionFileBytes = Interlocked.Read(ref _backgroundCompressionFileBytes);
         long segmentCount = Interlocked.Read(ref _tdmsFullSegmentCount) + Interlocked.Read(ref _tdmsPartialSegmentCount);
         DateTime stoppedAtUtc = _stoppedAtUtc == default ? DateTime.UtcNow : _stoppedAtUtc;
         double captureSeconds = Math.Max((stoppedAtUtc - _startedAtUtc).TotalSeconds, 0.001);
         double tdmsWriteSeconds = Math.Max(TimeSpan.FromTicks(writeTicks).TotalSeconds, 0.001);
         double payloadMiB = payloadBytes / 1024d / 1024d;
+        double compressionRatio = payloadBytes > 0 && compressionPayloadBytes > 0
+            ? (double)compressionPayloadBytes / payloadBytes
+            : 0d;
 
         LogDiagnostic(
-            $"complete-tdms-summary files={segmentCount:N0} fullSegments={Interlocked.Read(ref _tdmsFullSegmentCount):N0} partialSegments={Interlocked.Read(ref _tdmsPartialSegmentCount):N0} payloadBytes={payloadBytes:N0} fileBytes={fileBytes:N0} captureElapsedMs={captureSeconds * 1000d:F3} sourceDrainMs={sourceWriterDrainElapsed.TotalMilliseconds:F3} segmentDrainMs={segmentWriterDrainElapsed.TotalMilliseconds:F3} tdmsWriteMsSum={TimeSpan.FromTicks(writeTicks).TotalMilliseconds:F3} appendMsSum={TimeSpan.FromTicks(appendTicks).TotalMilliseconds:F3} saveMsSum={TimeSpan.FromTicks(saveTicks).TotalMilliseconds:F3} closeMsSum={TimeSpan.FromTicks(closeTicks).TotalMilliseconds:F3} previewSegments={previewSegmentCount:N0} previewPayloadBytes={previewPayloadBytes:N0} previewWriteMsSum={TimeSpan.FromTicks(previewTicks).TotalMilliseconds:F3} avgPreviewMs={GetPreviewAverageMilliseconds():F3} capturePayloadMiBps={payloadMiB / captureSeconds:F1} tdmsWriterPayloadMiBpsSum={payloadMiB / tdmsWriteSeconds:F1} peakPendingBlocks={Interlocked.Read(ref _peakPendingBlockCount):N0} peakPendingBlockBytes={Interlocked.Read(ref _peakPendingPayloadBytes):N0} peakPendingSegments={Interlocked.Read(ref _peakPendingSegmentCount):N0} peakPendingSegmentBytes={Interlocked.Read(ref _peakPendingSegmentPayloadBytes):N0} peakSourceBlockMs={TimeSpan.FromTicks(Interlocked.Read(ref _peakSourceBlockTicks)).TotalMilliseconds:F3} peakSourceBlockDeinterleaveMs={TimeSpan.FromTicks(Interlocked.Read(ref _peakSourceBlockDeinterleaveTicks)).TotalMilliseconds:F3}");
+            $"complete-tdms-summary files={segmentCount:N0} fullSegments={Interlocked.Read(ref _tdmsFullSegmentCount):N0} partialSegments={Interlocked.Read(ref _tdmsPartialSegmentCount):N0} payloadBytes={payloadBytes:N0} fileBytes={fileBytes:N0} captureElapsedMs={captureSeconds * 1000d:F3} sourceDrainMs={sourceWriterDrainElapsed.TotalMilliseconds:F3} segmentDrainMs={segmentWriterDrainElapsed.TotalMilliseconds:F3} tdmsWriteMsSum={TimeSpan.FromTicks(writeTicks).TotalMilliseconds:F3} appendMsSum={TimeSpan.FromTicks(appendTicks).TotalMilliseconds:F3} saveMsSum={TimeSpan.FromTicks(saveTicks).TotalMilliseconds:F3} closeMsSum={TimeSpan.FromTicks(closeTicks).TotalMilliseconds:F3} previewSegments={previewSegmentCount:N0} previewPayloadBytes={previewPayloadBytes:N0} previewWriteMsSum={TimeSpan.FromTicks(previewTicks).TotalMilliseconds:F3} avgPreviewMs={GetPreviewAverageMilliseconds():F3} backgroundCompressionSegments={compressionSegmentCount:N0} backgroundCompressionFaults={Interlocked.Read(ref _backgroundCompressionFaultCount):N0} backgroundCompressionPayloadBytes={compressionPayloadBytes:N0} backgroundCompressionFileBytes={compressionFileBytes:N0} backgroundCompressionRatio={compressionRatio:F4} backgroundCompressionDrainMs={backgroundCompressionDrainElapsed.TotalMilliseconds:F3} backgroundCompressionMsSum={TimeSpan.FromTicks(compressionTicks).TotalMilliseconds:F3} backgroundCompressionReadMsSum={TimeSpan.FromTicks(compressionReadTicks).TotalMilliseconds:F3} capturePayloadMiBps={payloadMiB / captureSeconds:F1} tdmsWriterPayloadMiBpsSum={payloadMiB / tdmsWriteSeconds:F1} peakPendingBlocks={Interlocked.Read(ref _peakPendingBlockCount):N0} peakPendingBlockBytes={Interlocked.Read(ref _peakPendingPayloadBytes):N0} peakPendingSegments={Interlocked.Read(ref _peakPendingSegmentCount):N0} peakPendingSegmentBytes={Interlocked.Read(ref _peakPendingSegmentPayloadBytes):N0} peakPendingBackgroundCompression={Interlocked.Read(ref _peakPendingBackgroundCompressionCount):N0} peakPendingBackgroundCompressionBytes={Interlocked.Read(ref _peakPendingBackgroundCompressionPayloadBytes):N0} peakSourceBlockMs={TimeSpan.FromTicks(Interlocked.Read(ref _peakSourceBlockTicks)).TotalMilliseconds:F3} peakSourceBlockDeinterleaveMs={TimeSpan.FromTicks(Interlocked.Read(ref _peakSourceBlockDeinterleaveTicks)).TotalMilliseconds:F3}");
     }
 
     private void LogQueueStatusIfDue(string reason)
@@ -826,7 +1061,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             : 0d;
 
         LogDiagnostic(
-            $"tdms-queue-status reason={reason} tdmsSegmentWriters={TdmsSegmentWriterCount:N0} writtenSegments={segmentCount:N0} pendingSegments={Interlocked.Read(ref _pendingSegmentCount):N0} pendingSegmentBytes={Interlocked.Read(ref _pendingSegmentPayloadBytes):N0} peakPendingSegments={Interlocked.Read(ref _peakPendingSegmentCount):N0} peakPendingSegmentBytes={Interlocked.Read(ref _peakPendingSegmentPayloadBytes):N0} pendingBlocks={Interlocked.Read(ref _pendingBlockCount):N0} pendingBytes={Interlocked.Read(ref _pendingPayloadBytes):N0} enqueuedBlocks={Interlocked.Read(ref _enqueuedBlockCount):N0} writtenBlocks={Interlocked.Read(ref _writtenBlockCount):N0} rejectedBlocks={Interlocked.Read(ref _rejectedBlockCount):N0} payloadBytes={payloadBytes:N0} avgSegmentMs={avgSegmentMs:F3} avgPreviewMs={GetPreviewAverageMilliseconds():F3} wallPayloadMiBps={wallMiBps:F1} writerTimePayloadMiBps={writerTimeMiBps:F1}");
+            $"tdms-queue-status reason={reason} tdmsSegmentWriters={TdmsSegmentWriterCount:N0} writtenSegments={segmentCount:N0} pendingSegments={Interlocked.Read(ref _pendingSegmentCount):N0} pendingSegmentBytes={Interlocked.Read(ref _pendingSegmentPayloadBytes):N0} peakPendingSegments={Interlocked.Read(ref _peakPendingSegmentCount):N0} peakPendingSegmentBytes={Interlocked.Read(ref _peakPendingSegmentPayloadBytes):N0} pendingCompression={Interlocked.Read(ref _pendingBackgroundCompressionCount):N0} pendingCompressionBytes={Interlocked.Read(ref _pendingBackgroundCompressionPayloadBytes):N0} compressedSegments={Interlocked.Read(ref _backgroundCompressionSegmentCount):N0} compressionFaults={Interlocked.Read(ref _backgroundCompressionFaultCount):N0} pendingBlocks={Interlocked.Read(ref _pendingBlockCount):N0} pendingBytes={Interlocked.Read(ref _pendingPayloadBytes):N0} enqueuedBlocks={Interlocked.Read(ref _enqueuedBlockCount):N0} writtenBlocks={Interlocked.Read(ref _writtenBlockCount):N0} rejectedBlocks={Interlocked.Read(ref _rejectedBlockCount):N0} payloadBytes={payloadBytes:N0} avgSegmentMs={avgSegmentMs:F3} avgPreviewMs={GetPreviewAverageMilliseconds():F3} wallPayloadMiBps={wallMiBps:F1} writerTimePayloadMiBps={writerTimeMiBps:F1}");
     }
 
     private double GetPreviewAverageMilliseconds()
@@ -851,6 +1086,17 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         }
     }
 
+    private IReadOnlyList<string> GetCompressedFiles()
+    {
+        lock (_resultLock)
+        {
+            return _compressedFiles
+                .Where(File.Exists)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
     private IReadOnlyList<string> GetPreviewFiles()
     {
         lock (_resultLock)
@@ -862,9 +1108,21 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         }
     }
 
+    private IReadOnlyList<TdmsSegmentManifestEntry> GetCompressedTdmsSegments()
+    {
+        lock (_resultLock)
+        {
+            return _compressedTdmsSegments
+                .OrderBy(segment => segment.SourceId)
+                .ThenBy(segment => segment.SegmentIndex)
+                .ToArray();
+        }
+    }
+
     private void WriteSessionManifest(
         IReadOnlyCollection<string> writtenFiles,
-        IReadOnlyCollection<string> previewFiles)
+        IReadOnlyCollection<string> previewFiles,
+        IReadOnlyCollection<string> compressedFiles)
     {
         if (string.IsNullOrWhiteSpace(_artifactRootPath))
         {
@@ -878,7 +1136,9 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             _expectedChannelIds,
             writtenFiles,
             previewFiles,
-            BuildManifest(writtenFiles));
+            BuildManifest(writtenFiles),
+            compressedFiles,
+            GetCompressedTdmsSegments());
     }
 
     private IReadOnlyDictionary<string, long> BuildSampleCounts()
@@ -978,6 +1238,10 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             ChannelSampleCounts = new Dictionary<string, long>(sampleCounts, StringComparer.OrdinalIgnoreCase)
         };
         manifest.TdmsSegments = tdmsSegments;
+        manifest.CompressedTdmsSegments = GetCompressedTdmsSegments().ToList();
+        manifest.CompressedCaptureFileBytes = GetCompressedFiles().Where(File.Exists).Sum(static path => new FileInfo(path).Length);
+        manifest.CompressedPayloadBytes = Interlocked.Read(ref _backgroundCompressionPayloadBytes);
+        manifest.CompressionFaultCount = Interlocked.Read(ref _backgroundCompressionFaultCount);
         return manifest;
     }
 
@@ -1136,9 +1400,11 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private void ResetState()
     {
         _segmentWriteQueue.Writer.TryComplete();
+        _backgroundCompressionQueue.Writer.TryComplete();
         try
         {
             Task.WaitAll(_segmentWriterTasks.ToArray(), TimeSpan.FromSeconds(5));
+            Task.WaitAll(_backgroundCompressionTasks.ToArray(), TimeSpan.FromSeconds(5));
         }
         catch
         {
@@ -1151,13 +1417,19 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
         _sourceWriters.Clear();
         _segmentWriterTasks.Clear();
+        _backgroundCompressionTasks.Clear();
         _segmentWriteQueue = CreateSegmentWriteQueue();
+        _backgroundCompressionQueue = CreateBackgroundCompressionQueue();
         _channelSampleCounts.Clear();
         _writtenFiles.Clear();
+        _compressedFiles.Clear();
         _previewFiles.Clear();
+        _tdmsSegments.Clear();
+        _compressedTdmsSegments.Clear();
         _expectedChannelIds.Clear();
         _sessionFolder = null;
         _rawFolder = null;
+        _compressedFolder = null;
         _artifactRootPath = null;
         _diagnosticLogPath = null;
         _performanceDiagnosticLogPath = null;
@@ -1180,6 +1452,16 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         _previewWriteTicks = 0;
         _previewSegmentCount = 0;
         _previewPayloadBytes = 0;
+        _backgroundCompressionSegmentCount = 0;
+        _backgroundCompressionFaultCount = 0;
+        _backgroundCompressionPayloadBytes = 0;
+        _backgroundCompressionFileBytes = 0;
+        _backgroundCompressionTicks = 0;
+        _backgroundCompressionReadTicks = 0;
+        _pendingBackgroundCompressionCount = 0;
+        _pendingBackgroundCompressionPayloadBytes = 0;
+        _peakPendingBackgroundCompressionCount = 0;
+        _peakPendingBackgroundCompressionPayloadBytes = 0;
         _tdmsFullSegmentCount = 0;
         _tdmsPartialSegmentCount = 0;
         _pendingSegmentCount = 0;
@@ -1193,7 +1475,10 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         _protectionTriggered = 0;
         _protectionReason = "";
         _writerFault = null;
+        _backgroundCompressionFault = null;
         _previewWriter = null;
+        _requestedCompressionSettings = new StorageCompressionSettings();
+        _backgroundCompressionSettings = new StorageCompressionSettings();
         _compressionSettings = new StorageCompressionSettings();
     }
 
@@ -1202,7 +1487,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         int configuredChannelCount)
     {
         LogDiagnostic(
-            $"writer-created format=tdms-source-segment-async session={_sessionName} basePath={basePath} sessionFolder={_sessionFolder} rawFolder={_rawFolder} artifactRoot={_artifactRootPath} sampleRateHz={_sampleRateHz:F3} configuredChannels={configuredChannelCount:N0} hotPathHash={EnableHotPathWriteHash} compression={_compressionSettings.Describe()} pendingLimits={MaxPendingBlockLimit:N0}blocks/{MaxPendingPayloadByteLimit:N0}bytes sourcePendingLimits={MaxSourcePendingBlockLimit:N0}blocks/{MaxSourcePendingPayloadByteLimit:N0}bytes segmentPendingLimits={MaxPendingSegmentLimit:N0}segments/{MaxPendingSegmentPayloadByteLimit:N0}bytes");
+            $"writer-created format=tdms-source-segment-async session={_sessionName} basePath={basePath} sessionFolder={_sessionFolder} rawFolder={_rawFolder} compressedFolder={_compressedFolder} artifactRoot={_artifactRootPath} sampleRateHz={_sampleRateHz:F3} configuredChannels={configuredChannelCount:N0} hotPathHash={EnableHotPathWriteHash} compression={_compressionSettings.Describe()} backgroundCompression={_backgroundCompressionSettings.Describe()} backgroundCompressionEnabled={ShouldRunBackgroundCompression} pendingLimits={MaxPendingBlockLimit:N0}blocks/{MaxPendingPayloadByteLimit:N0}bytes sourcePendingLimits={MaxSourcePendingBlockLimit:N0}blocks/{MaxSourcePendingPayloadByteLimit:N0}bytes segmentPendingLimits={MaxPendingSegmentLimit:N0}segments/{MaxPendingSegmentPayloadByteLimit:N0}bytes");
         LogDiagnostic($"diagnostic-log sessionPath={_diagnosticLogPath} storagePerfPath={_performanceDiagnosticLogPath}");
     }
 

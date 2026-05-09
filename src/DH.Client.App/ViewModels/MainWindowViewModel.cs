@@ -1466,7 +1466,7 @@ public partial class MainWindowViewModel : ObservableObject
         if (compressionSettings.Enabled)
         {
             StorageCompressionConfigStatus =
-                $"{StorageCompressionConfigStatus}; SDK high-rate TDMS writes raw, offline compression required";
+                $"{StorageCompressionConfigStatus}; SDK high-rate TDMS writes raw + background realtime compression";
         }
 
         SaveStorageUiPreferences();

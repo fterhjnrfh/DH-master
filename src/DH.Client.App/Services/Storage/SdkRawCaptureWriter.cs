@@ -153,6 +153,14 @@ internal sealed class SdkRawCaptureManifest
     public Dictionary<string, long> ChannelSampleCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public List<TdmsSegmentManifestEntry> TdmsSegments { get; set; } = new();
+
+    public List<TdmsSegmentManifestEntry> CompressedTdmsSegments { get; set; } = new();
+
+    public long CompressedCaptureFileBytes { get; set; }
+
+    public long CompressedPayloadBytes { get; set; }
+
+    public long CompressionFaultCount { get; set; }
 }
 
 internal sealed class TdmsSegmentManifestEntry

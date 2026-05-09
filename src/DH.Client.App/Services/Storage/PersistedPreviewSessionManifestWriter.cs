@@ -21,7 +21,9 @@ internal static class PersistedPreviewSessionManifestWriter
         IReadOnlyCollection<int> channelIds,
         IReadOnlyCollection<string> tdmsFiles,
         IReadOnlyCollection<string> previewFiles,
-        SdkRawCaptureManifest? captureManifest)
+        SdkRawCaptureManifest? captureManifest,
+        IReadOnlyCollection<string>? compressedTdmsFiles = null,
+        IReadOnlyCollection<TdmsSegmentManifestEntry>? compressedTdmsSegments = null)
     {
         Directory.CreateDirectory(artifactRootPath);
         Guid sessionId = Guid.NewGuid();
@@ -40,6 +42,11 @@ internal static class PersistedPreviewSessionManifestWriter
             .ToArray();
 
         bool hasFastSegments = tdmsFiles.Any(static path => path.EndsWith(".dhseg", StringComparison.OrdinalIgnoreCase));
+        IEnumerable<TdmsSegmentManifestEntry> effectiveCompressedSegments =
+            compressedTdmsSegments
+            ?? captureManifest?.CompressedTdmsSegments
+            ?? Enumerable.Empty<TdmsSegmentManifestEntry>();
+
         var payload = new
         {
             SessionId = sessionId,
@@ -51,6 +58,10 @@ internal static class PersistedPreviewSessionManifestWriter
             PreviewLevels = new[] { "L1", "L2", "L3", "L4" },
             Sources = sourceDescriptors,
             TdmsFiles = tdmsFiles
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Select(path => Path.GetFullPath(path))
+                .ToArray(),
+            CompressedTdmsFiles = (compressedTdmsFiles ?? Array.Empty<string>())
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .Select(path => Path.GetFullPath(path))
                 .ToArray(),
@@ -79,6 +90,27 @@ internal static class PersistedPreviewSessionManifestWriter
                     segment.ChannelPayloadBytes
                 })
                 .ToArray() ?? Array.Empty<object>(),
+            CompressedTdmsSegments = effectiveCompressedSegments
+                .OrderBy(segment => segment.SourceId)
+                .ThenBy(segment => segment.SegmentIndex)
+                .Select(segment => new
+                {
+                    Path = Path.GetFullPath(segment.Path),
+                    segment.SourceId,
+                    segment.SegmentIndex,
+                    segment.StartSample,
+                    segment.SamplesPerChannel,
+                    segment.EndSampleExclusive,
+                    segment.SampleRateHz,
+                    segment.ChannelIds,
+                    segment.CompressionEnabled,
+                    segment.CompressionType,
+                    segment.PreprocessType,
+                    segment.CompressionOriginalPayloadBytes,
+                    segment.CompressionPayloadBytes,
+                    segment.ChannelPayloadBytes
+                })
+                .ToArray(),
             CaptureFileName = captureManifest?.CaptureFileName ?? string.Empty,
             CaptureFilePath = !string.IsNullOrWhiteSpace(captureManifest?.CaptureFileName)
                 ? Path.GetFullPath(Path.Combine(Path.GetDirectoryName(artifactRootPath) ?? artifactRootPath, captureManifest.CaptureFileName))
