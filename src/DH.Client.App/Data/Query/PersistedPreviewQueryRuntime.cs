@@ -454,6 +454,11 @@ public sealed class PersistedPreviewQueryRuntime :
             return Array.Empty<TdmsSegmentTimelineEntry>();
         }
 
+        bool timelineAlreadyAligned = GetBoolProperty(document.RootElement, "TdmsTimelineAlignedBySourceTiming") ?? false;
+        IReadOnlyDictionary<int, long> sourceTimingOffsets = timelineAlreadyAligned
+            ? new Dictionary<int, long>()
+            : ReadSourceTimingOffsets(document.RootElement);
+
         var entries = new List<TdmsSegmentTimelineEntry>();
         foreach (JsonElement element in segmentsElement.EnumerateArray())
         {
@@ -466,6 +471,11 @@ public sealed class PersistedPreviewQueryRuntime :
             int sourceId = GetIntProperty(element, "SourceId") ?? TryParseSourceSegment(path).sourceId;
             int segmentIndex = GetIntProperty(element, "SegmentIndex") ?? TryParseSourceSegment(path).segmentIndex;
             long startSample = GetLongProperty(element, "StartSample") ?? Math.Max(0, segmentIndex - 1) * (long)Math.Max(0, GetIntProperty(element, "SamplesPerChannel") ?? 0);
+            if (sourceTimingOffsets.TryGetValue(sourceId, out long sourceTimingOffsetSamples))
+            {
+                startSample += sourceTimingOffsetSamples;
+            }
+
             int samplesPerChannel = GetIntProperty(element, "SamplesPerChannel") ?? 0;
             double sampleRateHz = GetDoubleProperty(element, "SampleRateHz") ?? fallbackSampleRateHz;
             int[] channelIds = GetIntArrayProperty(element, "ChannelIds");
@@ -496,6 +506,30 @@ public sealed class PersistedPreviewQueryRuntime :
             .OrderBy(entry => entry.SourceId)
             .ThenBy(entry => entry.SegmentIndex)
             .ToArray();
+    }
+
+    private static IReadOnlyDictionary<int, long> ReadSourceTimingOffsets(JsonElement root)
+    {
+        if (!root.TryGetProperty("SourceTimingDiagnostics", out JsonElement timingsElement)
+            || timingsElement.ValueKind != JsonValueKind.Array)
+        {
+            return new Dictionary<int, long>();
+        }
+
+        var offsets = new Dictionary<int, long>();
+        foreach (JsonElement timingElement in timingsElement.EnumerateArray())
+        {
+            int? sourceId = GetIntProperty(timingElement, "SourceId");
+            long? firstTotalDataOffsetSamples = GetLongProperty(timingElement, "FirstTotalDataOffsetSamples");
+            if (sourceId is null || firstTotalDataOffsetSamples is null || firstTotalDataOffsetSamples.Value <= 0)
+            {
+                continue;
+            }
+
+            offsets[sourceId.Value] = firstTotalDataOffsetSamples.Value;
+        }
+
+        return offsets;
     }
 
     private static IReadOnlyList<TdmsSegmentTimelineEntry> BuildTdmsSegmentTimelineFromFiles(

@@ -1191,6 +1191,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             return;
         }
 
+        SdkRawCaptureManifest manifest = BuildManifest(writtenFiles);
         PersistedPreviewSessionManifestWriter.Write(
             _artifactRootPath,
             _sessionName,
@@ -1198,9 +1199,9 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             _expectedChannelIds,
             writtenFiles,
             previewFiles,
-            BuildManifest(writtenFiles),
+            manifest,
             compressedFiles,
-            GetCompressedTdmsSegments());
+            manifest.CompressedTdmsSegments);
     }
 
     private IReadOnlyDictionary<string, long> BuildSampleCounts()
@@ -1215,7 +1216,12 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     {
         string firstFile = writtenFiles.FirstOrDefault() ?? string.Empty;
         var sampleCounts = BuildSampleCounts();
-        var tdmsSegments = GetTdmsSegments().ToList();
+        var sourceTimingDiagnostics = BuildSourceTimingDiagnostics().ToList();
+        var sourceTimingOffsets = sourceTimingDiagnostics.ToDictionary(
+            static timing => timing.SourceId,
+            static timing => timing.FirstTotalDataOffsetSamples);
+        var tdmsSegments = ApplySourceTimingOffsets(GetTdmsSegments(), sourceTimingOffsets).ToList();
+        var compressedTdmsSegments = ApplySourceTimingOffsets(GetCompressedTdmsSegments(), sourceTimingOffsets).ToList();
         var sourceSampleCounts = BuildTdmsSourceSampleCounts(tdmsSegments);
         long minDeviceSamplesPerChannel = sourceSampleCounts.Count > 0
             ? sourceSampleCounts.Min(source => source.SamplesPerChannel)
@@ -1300,12 +1306,47 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             ChannelSampleCounts = new Dictionary<string, long>(sampleCounts, StringComparer.OrdinalIgnoreCase)
         };
         manifest.TdmsSegments = tdmsSegments;
-        manifest.CompressedTdmsSegments = GetCompressedTdmsSegments().ToList();
+        manifest.CompressedTdmsSegments = compressedTdmsSegments;
         manifest.CompressedCaptureFileBytes = GetCompressedFiles().Where(File.Exists).Sum(static path => new FileInfo(path).Length);
         manifest.CompressedPayloadBytes = Interlocked.Read(ref _backgroundCompressionPayloadBytes);
         manifest.CompressionFaultCount = Interlocked.Read(ref _backgroundCompressionFaultCount);
-        manifest.SourceTimingDiagnostics = BuildSourceTimingDiagnostics().ToList();
+        manifest.SourceTimingDiagnostics = sourceTimingDiagnostics;
         return manifest;
+    }
+
+    private static IReadOnlyList<TdmsSegmentManifestEntry> ApplySourceTimingOffsets(
+        IReadOnlyCollection<TdmsSegmentManifestEntry> segments,
+        IReadOnlyDictionary<int, long> sourceTimingOffsets)
+    {
+        if (segments.Count == 0)
+        {
+            return Array.Empty<TdmsSegmentManifestEntry>();
+        }
+
+        return segments
+            .OrderBy(static segment => segment.SourceId)
+            .ThenBy(static segment => segment.SegmentIndex)
+            .Select(segment =>
+            {
+                sourceTimingOffsets.TryGetValue(segment.SourceId, out long sourceOffsetSamples);
+                return new TdmsSegmentManifestEntry
+                {
+                    Path = segment.Path,
+                    SourceId = segment.SourceId,
+                    SegmentIndex = segment.SegmentIndex,
+                    StartSample = segment.StartSample + Math.Max(0L, sourceOffsetSamples),
+                    SamplesPerChannel = segment.SamplesPerChannel,
+                    SampleRateHz = segment.SampleRateHz,
+                    ChannelIds = segment.ChannelIds,
+                    CompressionEnabled = segment.CompressionEnabled,
+                    CompressionType = segment.CompressionType,
+                    PreprocessType = segment.PreprocessType,
+                    CompressionOriginalPayloadBytes = segment.CompressionOriginalPayloadBytes,
+                    CompressionPayloadBytes = segment.CompressionPayloadBytes,
+                    ChannelPayloadBytes = segment.ChannelPayloadBytes
+                };
+            })
+            .ToArray();
     }
 
     private static IReadOnlyList<TdmsSourceSampleCount> BuildTdmsSourceSampleCounts(
@@ -1315,7 +1356,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
             .OrderBy(static group => group.Key)
             .Select(static group =>
             {
-                long samplesPerChannel = group.Max(static segment => segment.EndSampleExclusive);
+                long samplesPerChannel = group.Sum(static segment => (long)segment.SamplesPerChannel);
                 int channelCount = group
                     .SelectMany(static segment => segment.ChannelIds)
                     .Distinct()

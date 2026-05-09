@@ -1379,6 +1379,11 @@ public class TdmsViewerViewModel : ObservableObject
         var channelIds = preferredChannelIds.Where(id => id > 0).Distinct().ToHashSet();
         var maxEndByChannel = channelIds.ToDictionary(id => id, _ => 0L);
         long maxEndSampleIndex = 0L;
+        bool timelineAlreadyAligned = root.TryGetProperty("TdmsTimelineAlignedBySourceTiming", out JsonElement alignedElement)
+            && alignedElement.ValueKind == JsonValueKind.True;
+        IReadOnlyDictionary<int, long> sourceTimingOffsets = timelineAlreadyAligned
+            ? new Dictionary<int, long>()
+            : ReadTdmsManifestSourceTimingOffsets(root);
         if (root.TryGetProperty("TdmsSegments", out JsonElement segmentsElement)
             && segmentsElement.ValueKind == JsonValueKind.Array)
         {
@@ -1402,6 +1407,15 @@ public class TdmsViewerViewModel : ObservableObject
                     && samplesElement.TryGetInt64(out long samplesPerChannel))
                 {
                     endSample = startSample + samplesPerChannel;
+                }
+
+                int sourceId = segmentElement.TryGetProperty("SourceId", out JsonElement sourceElement)
+                    && sourceElement.TryGetInt32(out int parsedSourceId)
+                        ? parsedSourceId
+                        : -1;
+                if (sourceTimingOffsets.TryGetValue(sourceId, out long sourceOffsetSamples))
+                {
+                    endSample += sourceOffsetSamples;
                 }
 
                 maxEndSampleIndex = Math.Max(maxEndSampleIndex, endSample);
@@ -1433,6 +1447,32 @@ public class TdmsViewerViewModel : ObservableObject
         return sampleRateHz > 0 && totalDurationSeconds > 0
             ? new PreviewIndexSummary(sampleRateHz, totalDurationSeconds, new Dictionary<PreviewLevel, long>(), HasPreviewIndex: false)
             : null;
+    }
+
+    private static IReadOnlyDictionary<int, long> ReadTdmsManifestSourceTimingOffsets(JsonElement root)
+    {
+        if (!root.TryGetProperty("SourceTimingDiagnostics", out JsonElement timingsElement)
+            || timingsElement.ValueKind != JsonValueKind.Array)
+        {
+            return new Dictionary<int, long>();
+        }
+
+        var offsets = new Dictionary<int, long>();
+        foreach (JsonElement timingElement in timingsElement.EnumerateArray())
+        {
+            if (!timingElement.TryGetProperty("SourceId", out JsonElement sourceElement)
+                || !sourceElement.TryGetInt32(out int sourceId)
+                || !timingElement.TryGetProperty("FirstTotalDataOffsetSamples", out JsonElement offsetElement)
+                || !offsetElement.TryGetInt64(out long offsetSamples)
+                || offsetSamples <= 0)
+            {
+                continue;
+            }
+
+            offsets[sourceId] = offsetSamples;
+        }
+
+        return offsets;
     }
 
     private static PreviewLevel ChoosePreviewLevel(

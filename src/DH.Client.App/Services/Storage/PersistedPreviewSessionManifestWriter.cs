@@ -90,6 +90,7 @@ internal static class PersistedPreviewSessionManifestWriter
                     segment.ChannelPayloadBytes
                 })
                 .ToArray() ?? Array.Empty<object>(),
+            TdmsTimelineAlignedBySourceTiming = true,
             CompressedTdmsSegments = effectiveCompressedSegments
                 .OrderBy(segment => segment.SourceId)
                 .ThenBy(segment => segment.SegmentIndex)
