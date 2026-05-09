@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using DH.Client.App.Services.Storage;
 using Microsoft.Data.Sqlite;
 
 namespace DH.Client.App.Data.Query;
@@ -17,7 +18,8 @@ public sealed class FileSystemDataSessionCatalog : IDataSessionCatalog
     public enum MetadataSource
     {
         Manifest = 0,
-        Catalog = 1
+        Catalog = 1,
+        RecoveredTdms = 2
     }
 
     public sealed record OpenDiagnostics(
@@ -78,6 +80,17 @@ public sealed class FileSystemDataSessionCatalog : IDataSessionCatalog
 
         if (string.IsNullOrWhiteSpace(artifacts.ManifestPath))
         {
+            SessionDescriptor? recoveredSession = TryOpenRecoveredTdmsSession(artifacts.SessionPath);
+            if (recoveredSession is not null)
+            {
+                return new OpenDiagnostics(
+                    recoveredSession,
+                    artifacts,
+                    MetadataSource.RecoveredTdms,
+                    CatalogStructure: null,
+                    artifactValidation);
+            }
+
             throw new FileNotFoundException(
                 "No manifest file was found under the session path.",
                 sessionPath);
@@ -104,6 +117,210 @@ public sealed class FileSystemDataSessionCatalog : IDataSessionCatalog
             PreviewLevels = GetPreviewLevels(root)
         };
         return new OpenDiagnostics(session, artifacts, MetadataSource.Manifest, CatalogStructure: null, artifactValidation);
+    }
+
+    private static SessionDescriptor? TryOpenRecoveredTdmsSession(string sessionPath)
+    {
+        string[] tdmsFiles = FindRecoveredTdmsFiles(sessionPath);
+        if (tdmsFiles.Length == 0)
+        {
+            return null;
+        }
+
+        var sources = new List<SourceDescriptor>();
+        foreach (var group in tdmsFiles
+            .Select(path => (Path: path, Parsed: TryParseSourceSegment(path)))
+            .Where(item => item.Parsed.SourceId >= 0)
+            .GroupBy(item => item.Parsed.SourceId)
+            .OrderBy(group => group.Key))
+        {
+            int channelCount = 0;
+            double sampleRateHz = 0.0;
+            foreach (string filePath in group.Select(item => item.Path).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                if (TryReadTdmsStructure(filePath, group.Key, out int parsedChannelCount, out double parsedSampleRateHz))
+                {
+                    channelCount = Math.Max(channelCount, parsedChannelCount);
+                    if (sampleRateHz <= 0 && parsedSampleRateHz > 0)
+                    {
+                        sampleRateHz = parsedSampleRateHz;
+                    }
+                }
+
+                if (channelCount > 0 && sampleRateHz > 0)
+                {
+                    break;
+                }
+            }
+
+            if (channelCount <= 0)
+            {
+                continue;
+            }
+
+            sources.Add(new SourceDescriptor
+            {
+                SourceId = group.Key,
+                DeviceName = $"Device {group.Key:D2}",
+                ChannelCount = channelCount,
+                SampleRateHz = sampleRateHz > 0 ? sampleRateHz : 1_000_000.0,
+                TimeAxisKind = TimeAxisKind.SampleIndexMappedTime
+            });
+        }
+
+        if (sources.Count == 0)
+        {
+            return null;
+        }
+
+        DateTimeOffset startTime = tdmsFiles
+            .Select(path => new FileInfo(path).CreationTimeUtc)
+            .DefaultIfEmpty(DateTime.UtcNow)
+            .Min();
+
+        string taskName = ResolveRecoveredTaskName(sessionPath);
+        return new SessionDescriptor
+        {
+            SessionId = Guid.NewGuid(),
+            TaskName = taskName,
+            StartTime = startTime,
+            EndTime = null,
+            StorageFormat = "tdms-source-segment-recovered",
+            Recovered = true,
+            Sources = sources,
+            PreviewLevels = Array.Empty<PreviewLevel>()
+        };
+    }
+
+    private static string ResolveRecoveredTaskName(string sessionPath)
+    {
+        string fullPath = Path.GetFullPath(sessionPath);
+        string leaf = Path.GetFileName(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (leaf.EndsWith(".artifacts", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.GetFileName(Path.GetDirectoryName(fullPath) ?? fullPath);
+        }
+
+        return leaf;
+    }
+
+    private static string[] FindRecoveredTdmsFiles(string sessionPath)
+    {
+        string? rawRoot = FindRawRoot(sessionPath);
+        if (string.IsNullOrWhiteSpace(rawRoot) || !Directory.Exists(rawRoot))
+        {
+            return Array.Empty<string>();
+        }
+
+        return Directory
+            .EnumerateFiles(rawRoot, "source_*_seg*.tdms", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? FindRawRoot(string sessionPath)
+    {
+        string fullPath = Path.GetFullPath(sessionPath);
+        string leaf = Path.GetFileName(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.Equals(leaf, "raw", StringComparison.OrdinalIgnoreCase))
+        {
+            return fullPath;
+        }
+
+        if (leaf.EndsWith(".artifacts", StringComparison.OrdinalIgnoreCase))
+        {
+            string? parent = Path.GetDirectoryName(fullPath);
+            string siblingRaw = !string.IsNullOrWhiteSpace(parent)
+                ? Path.Combine(parent, "raw")
+                : string.Empty;
+            return Directory.Exists(siblingRaw) ? siblingRaw : null;
+        }
+
+        string childRaw = Path.Combine(fullPath, "raw");
+        if (Directory.Exists(childRaw))
+        {
+            return childRaw;
+        }
+
+        string? parentRaw = Path.Combine(Path.GetDirectoryName(fullPath) ?? fullPath, "raw");
+        return Directory.Exists(parentRaw) ? parentRaw : null;
+    }
+
+    private static bool TryReadTdmsStructure(
+        string filePath,
+        int sourceId,
+        out int channelCount,
+        out double sampleRateHz)
+    {
+        channelCount = 0;
+        sampleRateHz = 0.0;
+        try
+        {
+            string groupName = $"source_{sourceId:D4}";
+            var structure = TdmsReaderUtil.ListGroupsAndChannels(filePath);
+            if (!structure.TryGetValue(groupName, out string[] channels) || channels.Length == 0)
+            {
+                return false;
+            }
+
+            channelCount = channels.Length;
+            try
+            {
+                var props = TdmsReaderUtil.ReadChannelProperties(filePath, groupName, channels[0]);
+                if (TryGetDouble(props, "wf_increment") is { } increment && increment > 0)
+                {
+                    sampleRateHz = 1.0 / increment;
+                }
+            }
+            catch
+            {
+                sampleRateHz = 0.0;
+            }
+
+            return true;
+        }
+        catch
+        {
+            channelCount = 0;
+            sampleRateHz = 0.0;
+            return false;
+        }
+    }
+
+    private static (int SourceId, int SegmentIndex) TryParseSourceSegment(string filePath)
+    {
+        string name = Path.GetFileNameWithoutExtension(filePath);
+        var match = System.Text.RegularExpressions.Regex.Match(
+            name,
+            @"source_(\d+)_seg(\d+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success
+            || !int.TryParse(match.Groups[1].Value, out int sourceId)
+            || !int.TryParse(match.Groups[2].Value, out int segmentIndex))
+        {
+            return (-1, -1);
+        }
+
+        return (sourceId, segmentIndex);
+    }
+
+    private static double? TryGetDouble(IReadOnlyDictionary<string, object> props, string key)
+    {
+        if (!props.TryGetValue(key, out object? value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            double d => d,
+            float f => f,
+            int i => i,
+            long l => l,
+            string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) => parsed,
+            string s when double.TryParse(s, out double parsed) => parsed,
+            _ => null
+        };
     }
 
     private static async Task<CatalogStructureDiagnostics> ReadCatalogStructureAsync(

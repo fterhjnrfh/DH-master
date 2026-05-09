@@ -390,19 +390,22 @@ public sealed class PersistedPreviewQueryRuntime :
         }
 
         SessionArtifactPaths artifacts = await _artifactLocator.DiscoverAsync(_sessionPath, ct);
-        string manifestPath = artifacts.ManifestPath
-            ?? throw new FileNotFoundException("No session manifest was found.", _sessionPath);
+        if (string.IsNullOrWhiteSpace(artifacts.ManifestPath))
+        {
+            _tdmsFiles = FindRecoveredTdmsFiles(_sessionPath);
+            return _tdmsFiles;
+        }
 
-        await using var stream = File.OpenRead(manifestPath);
+        await using var stream = File.OpenRead(artifacts.ManifestPath);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
         if (!document.RootElement.TryGetProperty("TdmsFiles", out JsonElement tdmsFilesElement)
             || tdmsFilesElement.ValueKind != JsonValueKind.Array)
         {
-            _tdmsFiles = Array.Empty<string>();
+            _tdmsFiles = FindRecoveredTdmsFiles(_sessionPath);
             return _tdmsFiles;
         }
 
-        _tdmsFiles = tdmsFilesElement
+        var manifestFiles = tdmsFilesElement
             .EnumerateArray()
             .Where(element => element.ValueKind == JsonValueKind.String)
             .Select(element => element.GetString())
@@ -410,8 +413,52 @@ public sealed class PersistedPreviewQueryRuntime :
             .Select(path => Path.GetFullPath(path!))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        _tdmsFiles = manifestFiles.Length > 0
+            ? manifestFiles
+            : FindRecoveredTdmsFiles(_sessionPath);
 
         return _tdmsFiles;
+    }
+
+    private static IReadOnlyList<string> FindRecoveredTdmsFiles(string sessionPath)
+    {
+        string? rawRoot = FindRecoveredRawRoot(sessionPath);
+        if (string.IsNullOrWhiteSpace(rawRoot) || !Directory.Exists(rawRoot))
+        {
+            return Array.Empty<string>();
+        }
+
+        return Directory
+            .EnumerateFiles(rawRoot, "source_*_seg*.tdms", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(Path.GetFullPath)
+            .ToArray();
+    }
+
+    private static string? FindRecoveredRawRoot(string sessionPath)
+    {
+        string fullPath = Path.GetFullPath(sessionPath);
+        string leaf = Path.GetFileName(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.Equals(leaf, "raw", StringComparison.OrdinalIgnoreCase))
+        {
+            return fullPath;
+        }
+
+        if (leaf.EndsWith(".artifacts", StringComparison.OrdinalIgnoreCase))
+        {
+            string? parent = Directory.GetParent(fullPath)?.FullName;
+            string siblingRaw = !string.IsNullOrWhiteSpace(parent) ? Path.Combine(parent, "raw") : string.Empty;
+            return Directory.Exists(siblingRaw) ? siblingRaw : null;
+        }
+
+        string childRaw = Path.Combine(fullPath, "raw");
+        if (Directory.Exists(childRaw))
+        {
+            return childRaw;
+        }
+
+        string parentRaw = Path.Combine(Directory.GetParent(fullPath)?.FullName ?? fullPath, "raw");
+        return Directory.Exists(parentRaw) ? parentRaw : null;
     }
 
     private async ValueTask<IReadOnlyList<TdmsSegmentTimelineEntry>> EnsureTdmsSegmentTimelineAsync(
@@ -550,6 +597,7 @@ public sealed class PersistedPreviewQueryRuntime :
         foreach (var group in groups)
         {
             int sourceId = group.Key;
+            long sourceCursor = 0L;
             foreach (var item in group.OrderBy(item => item.parsed.segmentIndex))
             {
                 int samplesPerChannel = TryReadTdmsSegmentSamplesPerChannel(item.path, sourceId);
@@ -558,11 +606,14 @@ public sealed class PersistedPreviewQueryRuntime :
                     continue;
                 }
 
-                int[] channelIds = Enumerable
-                    .Range(1, 16)
-                    .Select(channelNumber => ChannelNaming.MakeChannelId(sourceId, channelNumber))
-                    .ToArray();
-                long startSample = Math.Max(0, item.parsed.segmentIndex - 1) * (long)samplesPerChannel;
+                int[] channelIds = TryReadTdmsSegmentChannelIds(item.path, sourceId);
+                if (channelIds.Length == 0)
+                {
+                    continue;
+                }
+
+                long startSample = sourceCursor;
+                sourceCursor += samplesPerChannel;
                 entries.Add(new TdmsSegmentTimelineEntry(
                     Path.GetFullPath(item.path),
                     sourceId,
@@ -1543,12 +1594,100 @@ public sealed class PersistedPreviewQueryRuntime :
                 return 0;
             }
 
+            try
+            {
+                var props = TdmsReaderUtil.ReadChannelProperties(filePath, groupName, channels[0]);
+                if (TryGetInt(props, "dh_original_sample_count") is { } compressedSampleCount
+                    && compressedSampleCount > 0)
+                {
+                    return compressedSampleCount;
+                }
+            }
+            catch
+            {
+            }
+
+            int estimatedSamples = EstimateUncompressedTdmsSamplesPerChannel(filePath, channels.Length);
+            if (estimatedSamples > 0)
+            {
+                return estimatedSamples;
+            }
+
             double[] data = TdmsReaderUtil.ReadChannelData(filePath, groupName, channels[0]);
             return data.Length;
         }
         catch
         {
             return 0;
+        }
+    }
+
+    private static int? TryGetInt(IReadOnlyDictionary<string, object> props, string key)
+    {
+        if (!props.TryGetValue(key, out object? value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            int i => i,
+            long l when l <= int.MaxValue && l >= int.MinValue => (int)l,
+            short s => s,
+            byte b => b,
+            double d when d <= int.MaxValue && d >= int.MinValue => (int)d,
+            float f when f <= int.MaxValue && f >= int.MinValue => (int)f,
+            string s when int.TryParse(s, out int parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static int EstimateUncompressedTdmsSamplesPerChannel(string filePath, int channelCount)
+    {
+        if (channelCount <= 0)
+        {
+            return 0;
+        }
+
+        long rawDataOffset = TryReadTdmsRawDataOffset(filePath);
+        if (rawDataOffset < 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            long payloadBytes = new FileInfo(filePath).Length - rawDataOffset;
+            long samples = payloadBytes / sizeof(float) / channelCount;
+            return samples > 0 && samples <= int.MaxValue ? (int)samples : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static int[] TryReadTdmsSegmentChannelIds(string filePath, int sourceId)
+    {
+        try
+        {
+            string groupName = $"source_{sourceId:D4}";
+            var structure = TdmsReaderUtil.ListGroupsAndChannels(filePath);
+            if (!structure.TryGetValue(groupName, out string[] channels) || channels.Length == 0)
+            {
+                return Array.Empty<int>();
+            }
+
+            return channels
+                .Select(ChannelNaming.ParseChannelName)
+                .Where(id => id >= 0)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+        }
+        catch
+        {
+            return Array.Empty<int>();
         }
     }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
@@ -1108,14 +1109,25 @@ public class TdmsViewerViewModel : ObservableObject
             }
 
             string leafName = Path.GetFileName(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (leafName.EndsWith(".artifacts", StringComparison.OrdinalIgnoreCase)
+                && ResolveRecoveredRawRoot(fullPath) is not null)
+            {
+                return fullPath;
+            }
+
             if (string.Equals(leafName, "raw", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(leafName, "compressed", StringComparison.OrdinalIgnoreCase))
             {
                 string? parent = Directory.GetParent(fullPath)?.FullName;
                 if (!string.IsNullOrWhiteSpace(parent))
                 {
-                    return FindArtifactRootInDirectory(parent);
+                    return FindArtifactRootInDirectory(parent) ?? parent;
                 }
+            }
+
+            if (ContainsSourceSegmentTdmsFiles(fullPath))
+            {
+                return fullPath;
             }
 
             return null;
@@ -1144,6 +1156,13 @@ public class TdmsViewerViewModel : ObservableObject
                 return parentArtifactRoot;
             }
 
+            string? parentDirectory = Directory.GetParent(directory)?.FullName;
+            if (!string.IsNullOrWhiteSpace(parentDirectory)
+                && ContainsSourceSegmentTdmsFiles(parentDirectory))
+            {
+                return parentDirectory;
+            }
+
             string artifacts = Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(fileName)}.artifacts");
             return IsSessionArtifactRoot(artifacts) ? artifacts : null;
         }
@@ -1161,6 +1180,20 @@ public class TdmsViewerViewModel : ObservableObject
         return null;
     }
 
+    private static bool ContainsSourceSegmentTdmsFiles(string directoryPath)
+    {
+        if (!Directory.Exists(directoryPath))
+        {
+            return false;
+        }
+
+        string rawPath = Path.Combine(directoryPath, "raw");
+        string searchRoot = Directory.Exists(rawPath) ? rawPath : directoryPath;
+        return Directory
+            .EnumerateFiles(searchRoot, "source_*_seg*.tdms", SearchOption.TopDirectoryOnly)
+            .Any();
+    }
+
     private static string? FindArtifactRootInDirectory(string directoryPath)
     {
         if (!Directory.Exists(directoryPath))
@@ -1173,9 +1206,19 @@ public class TdmsViewerViewModel : ObservableObject
             return directoryPath;
         }
 
-        return Directory
+        string? artifactRoot = Directory
             .EnumerateDirectories(directoryPath, "*.artifacts", SearchOption.TopDirectoryOnly)
             .Where(IsSessionArtifactRoot)
+            .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(artifactRoot))
+        {
+            return artifactRoot;
+        }
+
+        return Directory
+            .EnumerateDirectories(directoryPath, "*.artifacts", SearchOption.TopDirectoryOnly)
+            .Where(path => ContainsSourceSegmentTdmsFiles(Directory.GetParent(path)?.FullName ?? directoryPath))
             .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
     }
@@ -1230,7 +1273,7 @@ public class TdmsViewerViewModel : ObservableObject
         string manifestPath = Path.Combine(artifactPath, "session.manifest.json");
         if (!File.Exists(manifestPath))
         {
-            return false;
+            return TryLoadRecoveredSourceSegmentChannels(artifactPath, out channelsByGroup);
         }
 
         try
@@ -1276,8 +1319,92 @@ public class TdmsViewerViewModel : ObservableObject
         catch (Exception ex)
         {
             Console.WriteLine($"[TDMS] failed to read persisted session channels: {ex.Message}");
+            return TryLoadRecoveredSourceSegmentChannels(artifactPath, out channelsByGroup);
+        }
+    }
+
+    private static bool TryLoadRecoveredSourceSegmentChannels(
+        string artifactOrSessionPath,
+        out Dictionary<string, string[]> channelsByGroup)
+    {
+        channelsByGroup = new Dictionary<string, string[]>();
+        string? rawRoot = ResolveRecoveredRawRoot(artifactOrSessionPath);
+        if (string.IsNullOrWhiteSpace(rawRoot) || !Directory.Exists(rawRoot))
+        {
             return false;
         }
+
+        var results = new Dictionary<string, string[]>();
+        foreach (var group in Directory
+            .EnumerateFiles(rawRoot, "source_*_seg*.tdms", SearchOption.TopDirectoryOnly)
+            .Select(path => (Path: path, Parsed: TryParseSourceSegment(path)))
+            .Where(item => item.Parsed.SourceId >= 0)
+            .GroupBy(item => item.Parsed.SourceId)
+            .OrderBy(group => group.Key))
+        {
+            string groupName = $"source_{group.Key:D4}";
+            foreach (string filePath in group.Select(item => item.Path).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var structure = TdmsReaderUtil.ListGroupsAndChannels(filePath);
+                    if (structure.TryGetValue(groupName, out string[] channels) && channels.Length > 0)
+                    {
+                        results[groupName] = channels;
+                        break;
+                    }
+                }
+                catch
+                {
+                    // Try the next segment for this source. A power-loss test can leave the newest file partial.
+                }
+            }
+        }
+
+        if (results.Count == 0)
+        {
+            return false;
+        }
+
+        channelsByGroup = results;
+        return true;
+    }
+
+    private static string? ResolveRecoveredRawRoot(string artifactOrSessionPath)
+    {
+        string fullPath = Path.GetFullPath(artifactOrSessionPath);
+        string leaf = Path.GetFileName(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.Equals(leaf, "raw", StringComparison.OrdinalIgnoreCase))
+        {
+            return fullPath;
+        }
+
+        if (leaf.EndsWith(".artifacts", StringComparison.OrdinalIgnoreCase))
+        {
+            string? parent = Directory.GetParent(fullPath)?.FullName;
+            string siblingRaw = !string.IsNullOrWhiteSpace(parent) ? Path.Combine(parent, "raw") : string.Empty;
+            return Directory.Exists(siblingRaw) ? siblingRaw : null;
+        }
+
+        string childRaw = Path.Combine(fullPath, "raw");
+        return Directory.Exists(childRaw) ? childRaw : null;
+    }
+
+    private static (int SourceId, int SegmentIndex) TryParseSourceSegment(string filePath)
+    {
+        string name = Path.GetFileNameWithoutExtension(filePath);
+        var match = System.Text.RegularExpressions.Regex.Match(
+            name,
+            @"source_(\d+)_seg(\d+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success
+            || !int.TryParse(match.Groups[1].Value, out int sourceId)
+            || !int.TryParse(match.Groups[2].Value, out int segmentIndex))
+        {
+            return (-1, -1);
+        }
+
+        return (sourceId, segmentIndex);
     }
 
     private static bool IsSessionArtifactRoot(string artifactPath)
@@ -1302,7 +1429,13 @@ public class TdmsViewerViewModel : ObservableObject
             return preview;
         }
 
-        return await ReadTdmsManifestSummaryAsync(artifactPath, preferredChannelIds);
+        PreviewIndexSummary? manifest = await ReadTdmsManifestSummaryAsync(artifactPath, preferredChannelIds);
+        if (manifest is not null)
+        {
+            return manifest;
+        }
+
+        return ReadRecoveredTdmsSummary(artifactPath, preferredChannelIds);
     }
 
     private static async Task<PreviewIndexSummary?> ReadPreviewIndexSummaryAsync(string artifactPath)
@@ -1473,6 +1606,180 @@ public class TdmsViewerViewModel : ObservableObject
         }
 
         return offsets;
+    }
+
+    private static PreviewIndexSummary? ReadRecoveredTdmsSummary(
+        string artifactPath,
+        IEnumerable<int> preferredChannelIds)
+    {
+        string? rawRoot = ResolveRecoveredRawRoot(artifactPath);
+        if (string.IsNullOrWhiteSpace(rawRoot) || !Directory.Exists(rawRoot))
+        {
+            return null;
+        }
+
+        var selectedChannelIds = preferredChannelIds.Where(id => id > 0).Distinct().ToHashSet();
+        var maxEndByChannel = selectedChannelIds.ToDictionary(id => id, _ => 0L);
+        double sampleRateHz = 0.0;
+        long maxEndSampleIndex = 0L;
+
+        foreach (var sourceGroup in Directory
+            .EnumerateFiles(rawRoot, "source_*_seg*.tdms", SearchOption.TopDirectoryOnly)
+            .Select(path => (Path: path, Parsed: TryParseSourceSegment(path)))
+            .Where(item => item.Parsed.SourceId >= 0 && item.Parsed.SegmentIndex > 0)
+            .GroupBy(item => item.Parsed.SourceId)
+            .OrderBy(group => group.Key))
+        {
+            long sourceCursor = 0L;
+            string groupName = $"source_{sourceGroup.Key:D4}";
+            foreach (var item in sourceGroup.OrderBy(item => item.Parsed.SegmentIndex))
+            {
+                try
+                {
+                    var structure = TdmsReaderUtil.ListGroupsAndChannels(item.Path);
+                    if (!structure.TryGetValue(groupName, out string[] channels) || channels.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    IReadOnlyDictionary<string, object> props;
+                    try
+                    {
+                        props = TdmsReaderUtil.ReadChannelProperties(item.Path, groupName, channels[0]);
+                    }
+                    catch
+                    {
+                        props = new Dictionary<string, object>();
+                    }
+
+                    int samplesPerChannel = TryGetInt(props, "dh_original_sample_count")
+                        ?? EstimateUncompressedTdmsSamplesPerChannel(item.Path, channels.Length);
+                    if (samplesPerChannel <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (sampleRateHz <= 0)
+                    {
+                        double? increment = TryGetDouble(props, "wf_increment");
+                        if (increment is > 0)
+                        {
+                            sampleRateHz = 1.0 / increment.Value;
+                        }
+                    }
+
+                    long endSample = sourceCursor + samplesPerChannel;
+                    sourceCursor = endSample;
+                    maxEndSampleIndex = Math.Max(maxEndSampleIndex, endSample);
+
+                    if (maxEndByChannel.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    var channelIds = channels
+                        .Select(ParseChannelId)
+                        .Where(id => id > 0 && maxEndByChannel.ContainsKey(id))
+                        .Distinct();
+                    foreach (int channelId in channelIds)
+                    {
+                        maxEndByChannel[channelId] = Math.Max(maxEndByChannel[channelId], endSample);
+                    }
+                }
+                catch
+                {
+                    // Abrupt shutdown can leave the latest segment incomplete; skip unreadable segments.
+                }
+            }
+        }
+
+        if (sampleRateHz <= 0 && maxEndSampleIndex > 0)
+        {
+            sampleRateHz = 1_000_000.0;
+        }
+
+        if (sampleRateHz <= 0 || maxEndSampleIndex <= 0)
+        {
+            return null;
+        }
+
+        long coveredEndSample = maxEndByChannel.Count > 0
+            ? maxEndByChannel.Values.Where(value => value > 0).DefaultIfEmpty(maxEndSampleIndex).Min()
+            : maxEndSampleIndex;
+        double totalDurationSeconds = coveredEndSample / sampleRateHz;
+        return totalDurationSeconds > 0
+            ? new PreviewIndexSummary(sampleRateHz, totalDurationSeconds, new Dictionary<PreviewLevel, long>(), HasPreviewIndex: false)
+            : null;
+    }
+
+    private static int? TryGetInt(IReadOnlyDictionary<string, object> props, string key)
+    {
+        if (!props.TryGetValue(key, out object? value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            int i => i,
+            long l when l <= int.MaxValue && l >= int.MinValue => (int)l,
+            short s => s,
+            byte b => b,
+            double d when d <= int.MaxValue && d >= int.MinValue => (int)d,
+            float f when f <= int.MaxValue && f >= int.MinValue => (int)f,
+            string s when int.TryParse(s, out int parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static int EstimateUncompressedTdmsSamplesPerChannel(string filePath, int channelCount)
+    {
+        if (channelCount <= 0)
+        {
+            return 0;
+        }
+
+        long rawDataOffset = TryReadTdmsRawDataOffset(filePath);
+        if (rawDataOffset < 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            long payloadBytes = new FileInfo(filePath).Length - rawDataOffset;
+            long samples = payloadBytes / sizeof(float) / channelCount;
+            return samples > 0 && samples <= int.MaxValue ? (int)samples : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static long TryReadTdmsRawDataOffset(string filePath)
+    {
+        Span<byte> header = stackalloc byte[28];
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.RandomAccess);
+            int read = stream.Read(header);
+            if (read < header.Length
+                || header[0] != (byte)'T'
+                || header[1] != (byte)'D'
+                || header[2] != (byte)'S'
+                || header[3] != (byte)'m')
+            {
+                return -1;
+            }
+
+            ulong rawDataOffset = BinaryPrimitives.ReadUInt64LittleEndian(header.Slice(20, 8));
+            return checked(28L + (long)rawDataOffset);
+        }
+        catch
+        {
+            return -1;
+        }
     }
 
     private static PreviewLevel ChoosePreviewLevel(
