@@ -2516,6 +2516,27 @@ public partial class MainWindowViewModel : ObservableObject
         summary.AppendLine($"原始 payload: {FormatStorageSize(manifest.RawPayloadBytes)}");
         summary.AppendLine($"文件总大小: {FormatStorageSize(manifest.CaptureFileBytes)}");
 
+        if (manifest.CompressedTdmsSegments.Count > 0 || manifest.CompressedCaptureFileBytes > 0)
+        {
+            double compressionRatio = manifest.RawPayloadBytes > 0 && manifest.CompressedPayloadBytes > 0
+                ? (double)manifest.CompressedPayloadBytes / manifest.RawPayloadBytes
+                : 0d;
+            summary.AppendLine($"Compressed TDMS segments: {manifest.CompressedTdmsSegments.Count:N0}");
+            summary.AppendLine($"Compressed payload: {FormatStorageSize(manifest.CompressedPayloadBytes)} ({compressionRatio:P2})");
+            summary.AppendLine($"Compressed files: {FormatStorageSize(manifest.CompressedCaptureFileBytes)}, faults={manifest.CompressionFaultCount:N0}");
+        }
+
+        if (manifest.SourceTimingDiagnostics.Count > 0)
+        {
+            long maxTotalDataOffset = manifest.SourceTimingDiagnostics.Max(static item => item.FirstTotalDataOffsetSamples);
+            double maxReceiveOffsetMs = manifest.SourceTimingDiagnostics.Max(static item => item.FirstReceiveOffsetMs);
+            summary.AppendLine($"Source timing spread: firstTotalDataOffset={maxTotalDataOffset:N0} samples, firstReceiveOffset={maxReceiveOffsetMs:F3} ms");
+            foreach (var timing in manifest.SourceTimingDiagnostics.OrderBy(static item => item.SourceId).Take(16))
+            {
+                summary.AppendLine($"- source {timing.SourceId}: firstTotalDataOffset={timing.FirstTotalDataOffsetSamples:N0} samples, firstReceiveOffset={timing.FirstReceiveOffsetMs:F3} ms, samples/ch={timing.SamplesPerChannel:N0}");
+            }
+        }
+
         var segmentCheck = CheckTdmsSegments(manifest.TdmsSegments);
         bool runtimeHealthy = !manifest.ProtectionTriggered
             && manifest.RejectedBlockCount == 0

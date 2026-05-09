@@ -43,6 +43,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private readonly List<string> _previewFiles = new();
     private readonly List<TdmsSegmentManifestEntry> _tdmsSegments = new();
     private readonly List<TdmsSegmentManifestEntry> _compressedTdmsSegments = new();
+    private readonly ConcurrentDictionary<int, TdmsSourceRawTimingState> _sourceRawTiming = new();
     private readonly HashSet<int> _expectedChannelIds = new();
     private readonly object _diagnosticLogLock = new();
     private readonly object _metricsLock = new();
@@ -253,6 +254,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         }
 
         int sourceId = SdkRawCaptureWriter.ResolveChannelDeviceId(rawBlock.GroupId, rawBlock.MachineId);
+        ObserveSourceRawTiming(sourceId, rawBlock);
         SourceTdmsWriter? sourceWriter = GetSourceWriterForBlock(sourceId, rawBlock.ChannelCount);
         if (sourceWriter == null)
         {
@@ -943,6 +945,14 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         Interlocked.Add(ref _pendingPayloadBytes, -rawBlock.PayloadBytes);
     }
 
+    private void ObserveSourceRawTiming(int sourceId, SdkRawBlock rawBlock)
+    {
+        TdmsSourceRawTimingState state = _sourceRawTiming.GetOrAdd(
+            sourceId,
+            static id => new TdmsSourceRawTimingState(id));
+        state.Observe(rawBlock);
+    }
+
     private void OnSourceBlockWritten(
         int sourceId,
         int sdkBlockIndex,
@@ -1045,6 +1055,12 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
 
         LogDiagnostic(
             $"complete-tdms-summary files={segmentCount:N0} fullSegments={Interlocked.Read(ref _tdmsFullSegmentCount):N0} partialSegments={Interlocked.Read(ref _tdmsPartialSegmentCount):N0} payloadBytes={payloadBytes:N0} fileBytes={fileBytes:N0} captureElapsedMs={captureSeconds * 1000d:F3} sourceDrainMs={sourceWriterDrainElapsed.TotalMilliseconds:F3} segmentDrainMs={segmentWriterDrainElapsed.TotalMilliseconds:F3} tdmsWriteMsSum={TimeSpan.FromTicks(writeTicks).TotalMilliseconds:F3} appendMsSum={TimeSpan.FromTicks(appendTicks).TotalMilliseconds:F3} saveMsSum={TimeSpan.FromTicks(saveTicks).TotalMilliseconds:F3} closeMsSum={TimeSpan.FromTicks(closeTicks).TotalMilliseconds:F3} previewSegments={previewSegmentCount:N0} previewPayloadBytes={previewPayloadBytes:N0} previewWriteMsSum={TimeSpan.FromTicks(previewTicks).TotalMilliseconds:F3} avgPreviewMs={GetPreviewAverageMilliseconds():F3} backgroundCompressionSegments={compressionSegmentCount:N0} backgroundCompressionFaults={Interlocked.Read(ref _backgroundCompressionFaultCount):N0} backgroundCompressionPayloadBytes={compressionPayloadBytes:N0} backgroundCompressionFileBytes={compressionFileBytes:N0} backgroundCompressionRatio={compressionRatio:F4} backgroundCompressionDrainMs={backgroundCompressionDrainElapsed.TotalMilliseconds:F3} backgroundCompressionMsSum={TimeSpan.FromTicks(compressionTicks).TotalMilliseconds:F3} backgroundCompressionReadMsSum={TimeSpan.FromTicks(compressionReadTicks).TotalMilliseconds:F3} capturePayloadMiBps={payloadMiB / captureSeconds:F1} tdmsWriterPayloadMiBpsSum={payloadMiB / tdmsWriteSeconds:F1} peakPendingBlocks={Interlocked.Read(ref _peakPendingBlockCount):N0} peakPendingBlockBytes={Interlocked.Read(ref _peakPendingPayloadBytes):N0} peakPendingSegments={Interlocked.Read(ref _peakPendingSegmentCount):N0} peakPendingSegmentBytes={Interlocked.Read(ref _peakPendingSegmentPayloadBytes):N0} peakPendingBackgroundCompression={Interlocked.Read(ref _peakPendingBackgroundCompressionCount):N0} peakPendingBackgroundCompressionBytes={Interlocked.Read(ref _peakPendingBackgroundCompressionPayloadBytes):N0} peakSourceBlockMs={TimeSpan.FromTicks(Interlocked.Read(ref _peakSourceBlockTicks)).TotalMilliseconds:F3} peakSourceBlockDeinterleaveMs={TimeSpan.FromTicks(Interlocked.Read(ref _peakSourceBlockDeinterleaveTicks)).TotalMilliseconds:F3}");
+
+        foreach (var timing in BuildSourceTimingDiagnostics().OrderBy(static item => item.SourceId))
+        {
+            LogDiagnostic(
+                $"source-timing source={timing.SourceId} blocks={timing.BlockCount:N0} samplesPerChannel={timing.SamplesPerChannel:N0} firstTotalData={timing.FirstTotalDataCount:N0} lastTotalData={timing.LastTotalDataCount:N0} firstTotalDataOffsetSamples={timing.FirstTotalDataOffsetSamples:N0} firstReceiveOffsetMs={timing.FirstReceiveOffsetMs:F3}");
+        }
     }
 
     private void LogQueueStatusIfDue(string reason)
@@ -1133,6 +1149,36 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                 .ThenBy(segment => segment.SegmentIndex)
                 .ToArray();
         }
+    }
+
+    private IReadOnlyList<TdmsSourceTimingDiagnostic> BuildSourceTimingDiagnostics()
+    {
+        var snapshots = _sourceRawTiming.Values
+            .Select(static state => state.Snapshot())
+            .Where(static item => item.BlockCount > 0)
+            .OrderBy(static item => item.SourceId)
+            .ToArray();
+        if (snapshots.Length == 0)
+        {
+            return Array.Empty<TdmsSourceTimingDiagnostic>();
+        }
+
+        long minFirstTotalData = snapshots.Min(static item => item.FirstTotalDataCount);
+        DateTime minFirstReceive = snapshots.Min(static item => item.FirstReceivedAtUtc);
+        return snapshots
+            .Select(item => new TdmsSourceTimingDiagnostic
+            {
+                SourceId = item.SourceId,
+                BlockCount = item.BlockCount,
+                SamplesPerChannel = item.SamplesPerChannel,
+                FirstTotalDataCount = item.FirstTotalDataCount,
+                LastTotalDataCount = item.LastTotalDataCount,
+                FirstTotalDataOffsetSamples = item.FirstTotalDataCount - minFirstTotalData,
+                FirstReceiveOffsetMs = (item.FirstReceivedAtUtc - minFirstReceive).TotalMilliseconds,
+                FirstReceivedAtUtc = item.FirstReceivedAtUtc,
+                LastReceivedAtUtc = item.LastReceivedAtUtc
+            })
+            .ToArray();
     }
 
     private void WriteSessionManifest(
@@ -1258,6 +1304,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         manifest.CompressedCaptureFileBytes = GetCompressedFiles().Where(File.Exists).Sum(static path => new FileInfo(path).Length);
         manifest.CompressedPayloadBytes = Interlocked.Read(ref _backgroundCompressionPayloadBytes);
         manifest.CompressionFaultCount = Interlocked.Read(ref _backgroundCompressionFaultCount);
+        manifest.SourceTimingDiagnostics = BuildSourceTimingDiagnostics().ToList();
         return manifest;
     }
 
@@ -1442,6 +1489,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         _previewFiles.Clear();
         _tdmsSegments.Clear();
         _compressedTdmsSegments.Clear();
+        _sourceRawTiming.Clear();
         _expectedChannelIds.Clear();
         _sessionFolder = null;
         _rawFolder = null;
@@ -2007,4 +2055,64 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         {
         }
     }
+
+    private sealed class TdmsSourceRawTimingState
+    {
+        private readonly object _gate = new();
+
+        public TdmsSourceRawTimingState(int sourceId)
+        {
+            SourceId = sourceId;
+        }
+
+        public int SourceId { get; }
+
+        private long _blockCount;
+        private long _samplesPerChannel;
+        private long _firstTotalDataCount;
+        private long _lastTotalDataCount;
+        private DateTime _firstReceivedAtUtc;
+        private DateTime _lastReceivedAtUtc;
+
+        public void Observe(SdkRawBlock rawBlock)
+        {
+            lock (_gate)
+            {
+                if (_blockCount == 0)
+                {
+                    _firstTotalDataCount = rawBlock.TotalDataCount;
+                    _firstReceivedAtUtc = rawBlock.ReceivedAtUtc;
+                }
+
+                _blockCount++;
+                _samplesPerChannel += rawBlock.DataCountPerChannel;
+                _lastTotalDataCount = rawBlock.TotalDataCount;
+                _lastReceivedAtUtc = rawBlock.ReceivedAtUtc;
+            }
+        }
+
+        public TdmsSourceRawTimingSnapshot Snapshot()
+        {
+            lock (_gate)
+            {
+                return new TdmsSourceRawTimingSnapshot(
+                    SourceId,
+                    _blockCount,
+                    _samplesPerChannel,
+                    _firstTotalDataCount,
+                    _lastTotalDataCount,
+                    _firstReceivedAtUtc,
+                    _lastReceivedAtUtc);
+            }
+        }
+    }
+
+    private sealed record TdmsSourceRawTimingSnapshot(
+        int SourceId,
+        long BlockCount,
+        long SamplesPerChannel,
+        long FirstTotalDataCount,
+        long LastTotalDataCount,
+        DateTime FirstReceivedAtUtc,
+        DateTime LastReceivedAtUtc);
 }

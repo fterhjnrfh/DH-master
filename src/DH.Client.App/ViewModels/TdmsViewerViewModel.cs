@@ -1100,7 +1100,25 @@ public class TdmsViewerViewModel : ObservableObject
     {
         if (Directory.Exists(inputPath))
         {
-            return FindArtifactRootInDirectory(Path.GetFullPath(inputPath));
+            string fullPath = Path.GetFullPath(inputPath);
+            string? artifactRoot = FindArtifactRootInDirectory(fullPath);
+            if (!string.IsNullOrWhiteSpace(artifactRoot))
+            {
+                return artifactRoot;
+            }
+
+            string leafName = Path.GetFileName(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.Equals(leafName, "raw", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(leafName, "compressed", StringComparison.OrdinalIgnoreCase))
+            {
+                string? parent = Directory.GetParent(fullPath)?.FullName;
+                if (!string.IsNullOrWhiteSpace(parent))
+                {
+                    return FindArtifactRootInDirectory(parent);
+                }
+            }
+
+            return null;
         }
 
         if (!File.Exists(inputPath))

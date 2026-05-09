@@ -111,6 +111,21 @@ internal static class PersistedPreviewSessionManifestWriter
                     segment.ChannelPayloadBytes
                 })
                 .ToArray(),
+            SourceTimingDiagnostics = captureManifest?.SourceTimingDiagnostics
+                .OrderBy(timing => timing.SourceId)
+                .Select(timing => new
+                {
+                    timing.SourceId,
+                    timing.BlockCount,
+                    timing.SamplesPerChannel,
+                    timing.FirstTotalDataCount,
+                    timing.LastTotalDataCount,
+                    timing.FirstTotalDataOffsetSamples,
+                    timing.FirstReceiveOffsetMs,
+                    timing.FirstReceivedAtUtc,
+                    timing.LastReceivedAtUtc
+                })
+                .ToArray() ?? Array.Empty<object>(),
             CaptureFileName = captureManifest?.CaptureFileName ?? string.Empty,
             CaptureFilePath = !string.IsNullOrWhiteSpace(captureManifest?.CaptureFileName)
                 ? Path.GetFullPath(Path.Combine(Path.GetDirectoryName(artifactRootPath) ?? artifactRootPath, captureManifest.CaptureFileName))

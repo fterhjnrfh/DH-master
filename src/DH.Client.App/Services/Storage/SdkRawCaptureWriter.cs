@@ -161,6 +161,29 @@ internal sealed class SdkRawCaptureManifest
     public long CompressedPayloadBytes { get; set; }
 
     public long CompressionFaultCount { get; set; }
+
+    public List<TdmsSourceTimingDiagnostic> SourceTimingDiagnostics { get; set; } = new();
+}
+
+internal sealed class TdmsSourceTimingDiagnostic
+{
+    public int SourceId { get; set; }
+
+    public long BlockCount { get; set; }
+
+    public long SamplesPerChannel { get; set; }
+
+    public long FirstTotalDataCount { get; set; }
+
+    public long LastTotalDataCount { get; set; }
+
+    public long FirstTotalDataOffsetSamples { get; set; }
+
+    public double FirstReceiveOffsetMs { get; set; }
+
+    public DateTime FirstReceivedAtUtc { get; set; }
+
+    public DateTime LastReceivedAtUtc { get; set; }
 }
 
 internal sealed class TdmsSegmentManifestEntry
