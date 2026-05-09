@@ -25,6 +25,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private const double StreamAppendChunkSeconds = 0.5d;
     private const int TdmsSegmentWriterCount = 2;
     private const int BackgroundCompressionWorkerCount = 1;
+    private const long InlineBackgroundCompressionPayloadBytePerSecondLimit = 256L * 1024 * 1024;
     private const double QueueStatusLogSeconds = 10d;
     private const long MaxPendingSegmentLimit = 200;
     private const long MaxPendingSegmentPayloadByteLimit = 64L * 1024 * 1024 * 1024;
@@ -98,6 +99,8 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
     private long _peakSourceBlockDeinterleaveTicks;
     private long _lastQueueStatusTicks;
     private double _writeSeconds;
+    private int _backgroundCompressionDrainEnabled;
+    private bool _backgroundCompressionDuringCapture;
     private int _protectionTriggered;
     private string _protectionReason = "";
     private Exception? _writerFault;
@@ -112,6 +115,9 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         => _backgroundCompressionSettings.Enabled
            && (_backgroundCompressionSettings.Algorithm != CompressionType.None
                || _backgroundCompressionSettings.Preprocess != PreprocessType.None);
+
+    private static double EstimateCapturePayloadBytesPerSecond(int channelCount, double sampleRateHz)
+        => Math.Max(0, channelCount) * Math.Max(0d, sampleRateHz) * sizeof(float);
 
     public void Start(
         string basePath,
@@ -134,6 +140,10 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         _backgroundCompressionSettings.Normalize();
         _compressionSettings = CreateCaptureHotPathCompressionSettings(_requestedCompressionSettings);
         _compressionSettings.Normalize();
+        _backgroundCompressionDuringCapture = ShouldRunBackgroundCompression
+            && EstimateCapturePayloadBytesPerSecond(expectedChannelIds.Count, sampleRateHz)
+                <= InlineBackgroundCompressionPayloadBytePerSecondLimit;
+        Volatile.Write(ref _backgroundCompressionDrainEnabled, _backgroundCompressionDuringCapture ? 1 : 0);
         _startedAtUtc = DateTime.UtcNow;
         _sessionFolder = StorageSessionNaming.CreateUniqueSessionFolder(basePath, sessionName, out string safeSessionName);
         _sessionName = safeSessionName;
@@ -182,7 +192,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                 Path.Combine(_artifactRootPath, "storage.background-compression.json"),
                 _backgroundCompressionSettings);
             LogDiagnostic(
-                $"background-compression-started workers={BackgroundCompressionWorkerCount:N0} requested={_backgroundCompressionSettings.Describe()} folder={_compressedFolder}");
+                $"background-compression-started workers={BackgroundCompressionWorkerCount:N0} requested={_backgroundCompressionSettings.Describe()} duringCapture={_backgroundCompressionDuringCapture} estimatedPayloadBytesPerSecond={EstimateCapturePayloadBytesPerSecond(expectedChannelIds.Count, sampleRateHz):N0} inlineLimitBytesPerSecond={InlineBackgroundCompressionPayloadBytePerSecondLimit:N0} folder={_compressedFolder}");
         }
 
         if (EnableCapturePreviewSidecar)
@@ -206,7 +216,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         if (_requestedCompressionSettings.Enabled && !_compressionSettings.Enabled)
         {
             LogDiagnostic(
-                $"compression-hot-path-bypassed requested={_requestedCompressionSettings.Describe()} effective={_compressionSettings.Describe()} backgroundRealtime={ShouldRunBackgroundCompression} reason=preserve-256ch-1MHz-capture-throughput");
+                $"compression-hot-path-bypassed requested={_requestedCompressionSettings.Describe()} effective={_compressionSettings.Describe()} backgroundRealtime={ShouldRunBackgroundCompression} backgroundDuringCapture={_backgroundCompressionDuringCapture} reason=preserve-256ch-1MHz-capture-throughput");
         }
 
         LogDiagnostic($"writer-started sourceWriters={_sourceWriters.Count:N0} tdmsSegmentWriters={TdmsSegmentWriterCount:N0} previewLevels={(EnableCapturePreviewSidecar ? "L2,L3,L4" : "disabled/offline-build")}");
@@ -422,6 +432,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
                 waitStopwatch.Restart();
                 try
                 {
+                    Volatile.Write(ref _backgroundCompressionDrainEnabled, 1);
                     _backgroundCompressionQueue.Writer.TryComplete();
                     try
                     {
@@ -805,6 +816,11 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         {
             while (await reader.WaitToReadAsync().ConfigureAwait(false))
             {
+                while (Volatile.Read(ref _backgroundCompressionDrainEnabled) == 0)
+                {
+                    await Task.Delay(100).ConfigureAwait(false);
+                }
+
                 while (reader.TryRead(out var job))
                 {
                     Interlocked.Decrement(ref _pendingBackgroundCompressionCount);
@@ -1472,6 +1488,8 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         _peakSourceBlockDeinterleaveTicks = 0;
         _lastQueueStatusTicks = 0;
         _writeSeconds = 0d;
+        _backgroundCompressionDrainEnabled = 0;
+        _backgroundCompressionDuringCapture = false;
         _protectionTriggered = 0;
         _protectionReason = "";
         _writerFault = null;
@@ -1487,7 +1505,7 @@ internal sealed class SdkTdmsCaptureWriter : IDisposable
         int configuredChannelCount)
     {
         LogDiagnostic(
-            $"writer-created format=tdms-source-segment-async session={_sessionName} basePath={basePath} sessionFolder={_sessionFolder} rawFolder={_rawFolder} compressedFolder={_compressedFolder} artifactRoot={_artifactRootPath} sampleRateHz={_sampleRateHz:F3} configuredChannels={configuredChannelCount:N0} hotPathHash={EnableHotPathWriteHash} compression={_compressionSettings.Describe()} backgroundCompression={_backgroundCompressionSettings.Describe()} backgroundCompressionEnabled={ShouldRunBackgroundCompression} pendingLimits={MaxPendingBlockLimit:N0}blocks/{MaxPendingPayloadByteLimit:N0}bytes sourcePendingLimits={MaxSourcePendingBlockLimit:N0}blocks/{MaxSourcePendingPayloadByteLimit:N0}bytes segmentPendingLimits={MaxPendingSegmentLimit:N0}segments/{MaxPendingSegmentPayloadByteLimit:N0}bytes");
+            $"writer-created format=tdms-source-segment-async session={_sessionName} basePath={basePath} sessionFolder={_sessionFolder} rawFolder={_rawFolder} compressedFolder={_compressedFolder} artifactRoot={_artifactRootPath} sampleRateHz={_sampleRateHz:F3} configuredChannels={configuredChannelCount:N0} hotPathHash={EnableHotPathWriteHash} compression={_compressionSettings.Describe()} backgroundCompression={_backgroundCompressionSettings.Describe()} backgroundCompressionEnabled={ShouldRunBackgroundCompression} backgroundCompressionDuringCapture={_backgroundCompressionDuringCapture} pendingLimits={MaxPendingBlockLimit:N0}blocks/{MaxPendingPayloadByteLimit:N0}bytes sourcePendingLimits={MaxSourcePendingBlockLimit:N0}blocks/{MaxSourcePendingPayloadByteLimit:N0}bytes segmentPendingLimits={MaxPendingSegmentLimit:N0}segments/{MaxPendingSegmentPayloadByteLimit:N0}bytes");
         LogDiagnostic($"diagnostic-log sessionPath={_diagnosticLogPath} storagePerfPath={_performanceDiagnosticLogPath}");
     }
 
